@@ -140,7 +140,7 @@ function publicRatesFromText(text: string): Quote[] {
 async function readRenderedRatePage(url: string, zipCode: string): Promise<Quote[]> {
   return Promise.race([
     readRenderedRatePageInternal(url, zipCode),
-    new Promise<Quote[]>((resolve) => setTimeout(() => resolve([]), 18_000)),
+    new Promise<Quote[]>((resolve) => setTimeout(() => resolve([]), 28_000)),
   ]);
 }
 
