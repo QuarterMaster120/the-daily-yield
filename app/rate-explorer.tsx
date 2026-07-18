@@ -6,7 +6,7 @@ type Quote = { term: string; months: number; apy: number };
 type RatePoint = { date: string; rate: number };
 type Treasury = { date: string; oneYear: number; tenYear: number; thirtyYear: number };
 
-const banks = ["Ally Bank", "American Express", "Bank of America", "BMO", "Capital One", "Chase", "Citizens Bank", "Fifth Third", "Huntington", "Morgan Stanley", "PNC", "Regions", "Synchrony Bank", "TD Bank", "Truist", "U.S. Bank", "Wells Fargo"];
+const banks = ["Ally Bank", "American Express", "Bank of America", "Capital One", "Chase", "Citizens Bank", "Fifth Third", "Morgan Stanley", "PNC", "Regions", "Synchrony Bank", "TD Bank", "Truist", "U.S. Bank", "Wells Fargo"];
 const treasuryTerms = { "Treasury 1 Year": "1-year", "Treasury 10 Year": "10-year", "Treasury 30 Year": "30-year" } as const;
 const emailTreasuryTerms = ["3 Mo", "6 Mo", "1 Yr", "2 Yr", "5 Yr", "10 Yr", "30 Yr"];
 type Selection = (typeof banks)[number] | keyof typeof treasuryTerms;
