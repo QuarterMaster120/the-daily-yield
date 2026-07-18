@@ -3,9 +3,9 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 
 type RatePoint = { date: string; rate: number };
-type Series = "Treasury 1 Year" | "Treasury 10 Year" | "Ally Bank CD" | "Synchrony Bank CD";
+type Series = "Treasury 1 Year" | "Treasury 10 Year" | "Ally Bank CD" | "Synchrony Bank CD" | "Chase CD" | "Fifth Third CD" | "Regions CD" | "Bank of America CD";
 
-const options: Series[] = ["Treasury 1 Year", "Treasury 10 Year", "Ally Bank CD", "Synchrony Bank CD"];
+const options: Series[] = ["Treasury 1 Year", "Treasury 10 Year", "Ally Bank CD", "Synchrony Bank CD", "Chase CD", "Fifth Third CD", "Regions CD", "Bank of America CD"];
 
 function RateCanvas({ points, period }: { points: RatePoint[]; period: "month" | "year" }) {
   const canvas = useRef<HTMLCanvasElement>(null);
