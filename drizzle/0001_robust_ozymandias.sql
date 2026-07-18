@@ -1,0 +1,1 @@
+ALTER TABLE `subscribers` ADD `zip_code` text DEFAULT '' NOT NULL;
