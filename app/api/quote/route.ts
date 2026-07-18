@@ -2,24 +2,31 @@ import puppeteer, { type BrowserWorker } from "@cloudflare/puppeteer";
 import { env } from "cloudflare:workers";
 
 type Quote = { term: string; months: number; apy: number };
+type BankSource = {
+  url: string;
+  local: boolean;
+  zipInput?: string;
+  zipSubmit?: string;
+  adapter?: "wells-fargo";
+};
 
-const banks = {
+const banks: Record<string, BankSource> = {
   "Ally Bank": { url: "https://www.ally.com/bank/cd-rates/", local: false },
   "American Express": { url: "https://www.americanexpress.com/en-us/banking/online-savings/cd-account/", local: false },
   "Bank of America": { url: "https://www.bankofamerica.com/deposits/bank-cds/cd-accounts/", local: true },
   "Capital One": { url: "https://www.capitalone.com/bank/cds/online-cds/", local: false },
-  Chase: { url: "https://www.chase.com/personal/savings/bank-cd", local: true },
-  "Citizens Bank": { url: "https://www.citizensbank.com/savings/certificates-of-deposit.aspx", local: true },
-  "Fifth Third": { url: "https://www.53.com/content/fifth-third/en/personal-banking/bank/savings/cds.html", local: true },
+  Chase: { url: "https://www.chase.com/personal/savings/bank-cd", local: true, zipInput: '#prePopulated, #zip-update-input, .zip-gate__interstitial--zipArea-field', zipSubmit: ".zip-gate_validate, #validate" },
+  "Citizens Bank": { url: "https://www.citizensbank.com/savings/cds-certificates-of-deposit/online-certificate-of-deposit.page", local: true, zipInput: "#cbds-textInput", zipSubmit: "#dcom-zip-modal-submit" },
+  "Fifth Third": { url: "https://www.53.com/content/fifth-third/en/personal-banking/bank/savings/certificates-of-deposit.html", local: true },
   "Morgan Stanley": { url: "https://www.morganstanley.com/what-we-do/wealth-management/cd-savings", local: true },
-  PNC: { url: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html", local: true },
-  Regions: { url: "https://www.regions.com/personal-banking/savings-and-cds/cds", local: true },
+  PNC: { url: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html", local: true, zipInput: "#zip-overlay #zipCodeUpdate, #zip-overlay-01 #zipCode", zipSubmit: "#form-button-1275034976, #form-button-1195175473" },
+  Regions: { url: "https://www.regions.com/personal-banking/savings/cd-account", local: true },
   "Synchrony Bank": { url: "https://www.synchronybank.com/banking/cd-rates/", local: false },
   "TD Bank": { url: "https://www.td.com/us/en/personal-banking/certificates-of-deposit", local: true },
   Truist: { url: "https://www.truist.com/savings/certificate-of-deposit", local: true },
   "U.S. Bank": { url: "https://www.usbank.com/bank-accounts/savings-accounts/certificate-of-deposit.html", local: true },
-  "Wells Fargo": { url: "https://www.wellsfargo.com/savings-cds/rates/", local: true },
-} as const;
+  "Wells Fargo": { url: "https://www.wellsfargo.com/savings-cds/rates/", local: true, adapter: "wells-fargo" },
+};
 
 const browserHeaders = {
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -94,7 +101,8 @@ function parseAdjacentRateTerms(text: string): Quote[] {
   return [...result.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
 }
 
-async function readPublicRatePage(url: string, zipCode: string) {
+async function readPublicRatePage(source: BankSource, zipCode: string) {
+  const { url } = source;
   {
     const directText = await readPublicText(`${url}${url.includes("?") ? "&" : "?"}zip=${zipCode}`, { headers: browserHeaders, cf: { cacheTtl: 0 } }, 12_000);
     if (directText) {
@@ -105,7 +113,7 @@ async function readPublicRatePage(url: string, zipCode: string) {
     if (directUnique.size) return { rates: [...directUnique.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12), retrieval: "direct" };
     }
   }
-  const renderedRates = await readRenderedRatePage(url, zipCode);
+  const renderedRates = await readRenderedRatePage(source, zipCode);
   if (renderedRates.length) return { rates: renderedRates, retrieval: "rendered-public-page" };
 
   let readerText = "";
@@ -135,24 +143,83 @@ function publicRatesFromText(text: string): Quote[] {
   return [...unique.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
 }
 
-async function applyZipCode(page: Awaited<ReturnType<Awaited<ReturnType<typeof puppeteer.launch>>["newPage"]>>, zipCode: string) {
-  const zipInput = await page.$('input[autocomplete="postal-code"], input[name*="zip" i], input[id*="zip" i], input[aria-label*="zip" i], input[placeholder*="zip" i]');
+type BrowserPage = Awaited<ReturnType<Awaited<ReturnType<typeof puppeteer.launch>>["newPage"]>>;
+
+async function applyZipCode(page: BrowserPage, source: BankSource, zipCode: string) {
+  const genericZipInput = 'input[autocomplete="postal-code"], input[name*="zip" i], input[id*="zip" i], input[aria-label*="zip" i], input[placeholder*="zip" i]';
+  const zipInput = await page.$(source.zipInput ?? genericZipInput);
   if (!zipInput) return;
   await zipInput.click({ clickCount: 3 });
   await page.keyboard.press("Control+A");
   await zipInput.type(zipCode);
-  await page.keyboard.press("Enter");
+  const submit = source.zipSubmit ? await page.$(source.zipSubmit) : null;
+  if (submit) await submit.click(); else await page.keyboard.press("Enter");
   await page.waitForNetworkIdle({ idleTime: 500, timeout: 5_000 }).catch(() => undefined);
 }
 
-async function readRenderedRatePage(url: string, zipCode: string): Promise<Quote[]> {
+function rateFromUnknown(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const parsed = Number(value.match(/\d+(?:\.\d+)?/)?.[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function structuredRates(value: unknown): Quote[] {
+  const rates = new Map<string, Quote>();
+  const visit = (node: unknown) => {
+    if (Array.isArray(node)) { node.forEach(visit); return; }
+    if (!node || typeof node !== "object") return;
+    const record = node as Record<string, unknown>;
+    const fields = Object.entries(record);
+    const termValue = fields.find(([key]) => /^(term|termDescription|termLabel|maturityTerm)$/i.test(key))?.[1];
+    const apyValue = fields.find(([key]) => /apy|annual.*yield/i.test(key))?.[1];
+    const parsedTerm = typeof termValue === "number" ? term(`${termValue} months`) : term(String(termValue ?? ""));
+    const apy = rateFromUnknown(apyValue);
+    if (parsedTerm && apy !== null) rates.set(`${parsedTerm.months}-${apy}`, { ...parsedTerm, apy });
+    Object.values(record).forEach(visit);
+  };
+  visit(value);
+  return [...rates.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
+}
+
+async function wellsFargoRates(page: BrowserPage, zipCode: string): Promise<Quote[]> {
+  const payload = await page.evaluate(async (zip) => {
+    const requestId = () => crypto.randomUUID();
+    const common = () => ({
+      "X-REQUEST-ID": requestId(),
+      "X-CORRELATION-ID": requestId(),
+      "X-WF-REQUEST-DATE": new Date().toISOString(),
+      "X-WF-CLIENT-ID": "WU",
+    });
+    await fetch(`/locator/zipState/${zip}`, { headers: { ...common(), "appId": "WWW", "X-WF-API-VERSION": "V1", "X-WF-CMP-ID": "Locator" } });
+    const response = await fetch("/xapi/product-service-research/products-rates/v1/deposit/rates", {
+      method: "POST",
+      headers: { ...common(), "Content-Type": "application/json", "X-WF-CMP-ID": "CONSUMER_DEPOSITS_RATES" },
+      body: JSON.stringify({ sub_product_code: ["40", "128"], product_type: ["c_cd"], rate_type: "standard", zip_code: zip }),
+    });
+    return response.ok ? response.json() : null;
+  }, zipCode);
+  const rates = new Map<string, Quote>();
+  const depositRates = (payload as { data?: { deposit_rates?: { rates?: Record<string, unknown>[] }[] } } | null)?.data?.deposit_rates ?? [];
+  for (const product of depositRates) for (const item of product.rates ?? []) {
+    const apy = rateFromUnknown(item.min_apr);
+    const start = rateFromUnknown(item.term_start); const end = rateFromUnknown(item.term_end);
+    const months = start !== null && start <= 60 ? Math.round(start) : end !== null ? Math.round(end / 30) : 0;
+    if (apy === null || months < 1 || months > 120) continue;
+    const label = start !== null && end !== null && start !== end ? `${months}-${Math.max(months, Math.round(end <= 60 ? end : end / 30))} Months` : `${months} ${months === 1 ? "Month" : "Months"}`;
+    rates.set(`${months}-${apy}`, { months, term: label, apy });
+  }
+  return rates.size ? [...rates.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12) : structuredRates(payload);
+}
+
+async function readRenderedRatePage(source: BankSource, zipCode: string): Promise<Quote[]> {
   return Promise.race([
-    readRenderedRatePageInternal(url, zipCode),
+    readRenderedRatePageInternal(source, zipCode),
     new Promise<Quote[]>((resolve) => setTimeout(() => resolve([]), 28_000)),
   ]);
 }
 
-async function readRenderedRatePageInternal(url: string, zipCode: string): Promise<Quote[]> {
+async function readRenderedRatePageInternal(source: BankSource, zipCode: string): Promise<Quote[]> {
   if (!browserBinding) return [];
   let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
   try {
@@ -161,8 +228,12 @@ async function readRenderedRatePageInternal(url: string, zipCode: string): Promi
     await page.setViewport({ width: 1440, height: 1000 });
     // Some bank pages keep analytics connections open; a navigation timeout
     // does not mean their public rate table failed to render.
-    await page.goto(addZipParameter(url, zipCode), { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => null);
-    await applyZipCode(page, zipCode).catch(() => undefined);
+    await page.goto(addZipParameter(source.url, zipCode), { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => null);
+    if (source.adapter === "wells-fargo") {
+      const rates = await wellsFargoRates(page, zipCode).catch(() => []);
+      if (rates.length) return rates;
+    }
+    await applyZipCode(page, source, zipCode).catch(() => undefined);
     const [html, visibleText] = await Promise.all([
       page.content(),
       page.evaluate(() => document.body?.innerText ?? ""),
@@ -197,7 +268,7 @@ export async function GET(request: Request) {
   if (!/^\d{5}$/.test(zipCode)) return Response.json({ error: "Enter a five-digit U.S. ZIP code." }, { status: 400 });
   const source = banks[bank as keyof typeof banks];
   try {
-    const quote = bank === "Synchrony Bank" ? { rates: await synchronyRates(), retrieval: "official-feed" } : await readPublicRatePage(source.url, zipCode);
+    const quote = bank === "Synchrony Bank" ? { rates: await synchronyRates(), retrieval: "official-feed" } : await readPublicRatePage(source, zipCode);
     const rates = quote.rates;
     if (!rates.length) return Response.json({ error: "The bank did not return a usable public CD quote for this ZIP. Use the official link to confirm availability.", source: source.url, locationSensitive: source.local, retrieval: quote.retrieval }, { status: 424 });
     return Response.json({ bank, zipCode, rates, source: source.url, locationSensitive: source.local, retrieval: quote.retrieval, retrievedAt: new Date().toISOString() }, { headers: { "Cache-Control": "no-store" } });
