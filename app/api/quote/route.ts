@@ -7,8 +7,12 @@ const banks = {
   "Capital One": { url: "https://www.capitalone.com/bank/cds/online-cds/", local: false },
   Chase: { url: "https://www.chase.com/personal/savings/bank-cd", local: true },
   "Fifth Third": { url: "https://www.53.com/content/fifth-third/en/personal-banking/bank/savings/cds.html", local: true },
+  PNC: { url: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html", local: true },
   Regions: { url: "https://www.regions.com/personal-banking/savings-and-cds/cds", local: true },
   "Synchrony Bank": { url: "https://www.synchronybank.com/banking/cd-rates/", local: false },
+  Truist: { url: "https://www.truist.com/savings/certificate-of-deposit", local: true },
+  "U.S. Bank": { url: "https://www.usbank.com/bank-accounts/savings-accounts/certificate-of-deposit.html", local: true },
+  "Wells Fargo": { url: "https://www.wellsfargo.com/savings-cds/rates/", local: true },
 } as const;
 
 const browserHeaders = {
