@@ -13,6 +13,9 @@ const localBindingConfig = {
       database_id: "97a8a87f-4906-4b82-86e9-a6f8404f4fb9",
     },
   ],
+  browser: {
+    binding: "BROWSER",
+  },
 };
 
 export default defineConfig(async () => {
