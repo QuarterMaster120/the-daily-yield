@@ -1,0 +1,4 @@
+import { integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+
+export const subscribers = sqliteTable("subscribers", { id: integer("id").primaryKey({ autoIncrement: true }), email: text("email").notNull(), createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP") }, (table) => [uniqueIndex("subscribers_email_unique").on(table.email)]);
+export const rateObservations = sqliteTable("rate_observations", { id: integer("id").primaryKey({ autoIncrement: true }), series: text("series").notNull(), observedOn: text("observed_on").notNull(), rate: real("rate").notNull(), createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP") }, (table) => [uniqueIndex("rate_observations_series_date_unique").on(table.series, table.observedOn)]);
