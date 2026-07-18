@@ -5,6 +5,7 @@ type Quote = { term: string; months: number; apy: number };
 type BankSource = {
   url: string;
   local: boolean;
+  browserRequired?: boolean;
   zipInput?: string;
   zipSubmit?: string;
   adapter?: "wells-fargo";
@@ -15,17 +16,17 @@ const banks: Record<string, BankSource> = {
   "American Express": { url: "https://www.americanexpress.com/en-us/banking/online-savings/cd-account/", local: false },
   "Bank of America": { url: "https://www.bankofamerica.com/deposits/bank-cds/cd-accounts/", local: true },
   "Capital One": { url: "https://www.capitalone.com/bank/cds/online-cds/", local: false },
-  Chase: { url: "https://www.chase.com/personal/savings/bank-cd", local: true, zipInput: '#prePopulated, #zip-update-input, .zip-gate__interstitial--zipArea-field', zipSubmit: ".zip-gate_validate, #validate" },
-  "Citizens Bank": { url: "https://www.citizensbank.com/savings/cds-certificates-of-deposit/online-certificate-of-deposit.page", local: true, zipInput: "#cbds-textInput", zipSubmit: "#dcom-zip-modal-submit" },
+  Chase: { url: "https://www.chase.com/personal/savings/bank-cd", local: true, browserRequired: true, zipInput: '#prePopulated, #zip-update-input, .zip-gate__interstitial--zipArea-field', zipSubmit: ".zip-gate_validate, #validate" },
+  "Citizens Bank": { url: "https://www.citizensbank.com/savings/cds-certificates-of-deposit/online-certificate-of-deposit.page", local: true, browserRequired: true, zipInput: "#cbds-textInput", zipSubmit: "#dcom-zip-modal-submit" },
   "Fifth Third": { url: "https://www.53.com/content/fifth-third/en/personal-banking/bank/savings/certificates-of-deposit.html", local: true },
   "Morgan Stanley": { url: "https://www.morganstanley.com/what-we-do/wealth-management/cd-savings", local: true },
-  PNC: { url: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html", local: true, zipInput: "#zip-overlay #zipCodeUpdate, #zip-overlay-01 #zipCode", zipSubmit: "#form-button-1275034976, #form-button-1195175473" },
+  PNC: { url: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html", local: true, browserRequired: true, zipInput: "#zip-overlay #zipCodeUpdate, #zip-overlay-01 #zipCode", zipSubmit: "#form-button-1275034976, #form-button-1195175473" },
   Regions: { url: "https://www.regions.com/personal-banking/savings/cd-account", local: true },
   "Synchrony Bank": { url: "https://www.synchronybank.com/banking/cd-rates/", local: false },
   "TD Bank": { url: "https://www.td.com/us/en/personal-banking/certificates-of-deposit", local: true },
   Truist: { url: "https://www.truist.com/savings/certificate-of-deposit", local: true },
   "U.S. Bank": { url: "https://www.usbank.com/bank-accounts/savings-accounts/certificate-of-deposit.html", local: true },
-  "Wells Fargo": { url: "https://www.wellsfargo.com/savings-cds/rates/", local: true, adapter: "wells-fargo" },
+  "Wells Fargo": { url: "https://www.wellsfargo.com/savings-cds/rates/", local: true, browserRequired: true, adapter: "wells-fargo" },
 };
 
 const browserHeaders = {
@@ -37,10 +38,25 @@ const browserBinding = (env as unknown as { BROWSER?: BrowserWorker }).BROWSER;
 
 type PublicFetchInit = RequestInit & { cf?: { cacheTtl?: number } };
 
+async function readBoundedText(response: Response, maximumBytes = 1_000_000) {
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maximumBytes) return "";
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder(); let received = 0; let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) return text + decoder.decode();
+    received += value.byteLength;
+    if (received > maximumBytes) { await reader.cancel(); return ""; }
+    text += decoder.decode(value, { stream: true });
+  }
+}
+
 async function readPublicText(url: string, init: PublicFetchInit, timeoutMs: number) {
   const controller = new AbortController();
   const request = fetch(url, { ...init, signal: controller.signal })
-    .then((response) => response.ok ? response.text() : "")
+    .then((response) => response.ok ? readBoundedText(response) : "")
     .catch(() => "");
   const deadline = new Promise<string>((resolve) => setTimeout(() => {
     controller.abort();
@@ -113,8 +129,17 @@ async function readPublicRatePage(source: BankSource, zipCode: string) {
     if (directUnique.size) return { rates: [...directUnique.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12), retrieval: "direct" };
     }
   }
-  const renderedRates = await readRenderedRatePage(source, zipCode);
-  if (renderedRates.length) return { rates: renderedRates, retrieval: "rendered-public-page" };
+
+  // A public reader cannot complete a bank's market-specific ZIP flow. Only
+  // invoke Browser Run for sources with a documented browser-side ZIP gate.
+  if (source.browserRequired) {
+    const rendered = await readRenderedRatePage(source, zipCode);
+    if (rendered.rates.length) return { rates: rendered.rates, retrieval: "rendered-public-page" };
+    return { rates: [], retrieval: rendered.reason === "rate-limited" ? "browser-rate-limited" : "unavailable", retryAfter: rendered.reason === "rate-limited" ? secondsUntilNextUtcDay() : undefined };
+  }
+
+  // Do not substitute a public-reader response for a market-specific rate.
+  if (source.local) return { rates: [], retrieval: "unavailable" };
 
   let readerText = "";
   {
@@ -127,6 +152,12 @@ async function readPublicRatePage(source: BankSource, zipCode: string) {
   const rates = strictRates.length ? strictRates : (adjacentRates.length ? adjacentRates : parseRates(readerText, false));
   const unique = new Map(rates.map((rate) => [`${rate.months}-${rate.apy}`, rate]));
   return { rates: [...unique.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12), retrieval: "public-reader" };
+}
+
+function secondsUntilNextUtcDay() {
+  const now = new Date();
+  const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  return Math.max(1, Math.ceil((next - now.getTime()) / 1_000));
 }
 
 function addZipParameter(url: string, zipCode: string) {
@@ -212,15 +243,10 @@ async function wellsFargoRates(page: BrowserPage, zipCode: string): Promise<Quot
   return rates.size ? [...rates.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12) : structuredRates(payload);
 }
 
-async function readRenderedRatePage(source: BankSource, zipCode: string): Promise<Quote[]> {
-  return Promise.race([
-    readRenderedRatePageInternal(source, zipCode),
-    new Promise<Quote[]>((resolve) => setTimeout(() => resolve([]), 28_000)),
-  ]);
-}
+type BrowserRead = { rates: Quote[]; reason?: "rate-limited" | "blocked" | "failed" };
 
-async function readRenderedRatePageInternal(source: BankSource, zipCode: string): Promise<Quote[]> {
-  if (!browserBinding) return [];
+async function readRenderedRatePage(source: BankSource, zipCode: string): Promise<BrowserRead> {
+  if (!browserBinding) return { rates: [], reason: "failed" };
   let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
   try {
     browser = await puppeteer.launch(browserBinding);
@@ -231,7 +257,7 @@ async function readRenderedRatePageInternal(source: BankSource, zipCode: string)
     await page.goto(addZipParameter(source.url, zipCode), { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => null);
     if (source.adapter === "wells-fargo") {
       const rates = await wellsFargoRates(page, zipCode).catch(() => []);
-      if (rates.length) return rates;
+      if (rates.length) return { rates };
     }
     await applyZipCode(page, source, zipCode).catch(() => undefined);
     const [html, visibleText] = await Promise.all([
@@ -240,10 +266,11 @@ async function readRenderedRatePageInternal(source: BankSource, zipCode: string)
     ]);
     const rendered = `${html.slice(0, 500_000)}\n${visibleText.slice(0, 500_000)}`;
     // Do not attempt to defeat a challenge page or any other access control.
-    if (/captcha|verify you are human|unusual traffic/i.test(rendered)) return [];
-    return publicRatesFromText(rendered);
-  } catch {
-    return [];
+    if (/captcha|verify you are human|unusual traffic/i.test(rendered)) return { rates: [], reason: "blocked" };
+    return { rates: publicRatesFromText(rendered) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { rates: [], reason: /(?:code:\s*429|time limit exceeded|too many requests)/i.test(message) ? "rate-limited" : "failed" };
   } finally {
     if (browser) await Promise.race([browser.close().catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2_000))]);
   }
@@ -270,7 +297,11 @@ export async function GET(request: Request) {
   try {
     const quote = bank === "Synchrony Bank" ? { rates: await synchronyRates(), retrieval: "official-feed" } : await readPublicRatePage(source, zipCode);
     const rates = quote.rates;
-    if (!rates.length) return Response.json({ error: "The bank did not return a usable public CD quote for this ZIP. Use the official link to confirm availability.", source: source.url, locationSensitive: source.local, retrieval: quote.retrieval }, { status: 424 });
+    if (!rates.length) {
+      const retryAfter = "retryAfter" in quote ? quote.retryAfter : undefined;
+      const error = retryAfter ? "ZIP-specific browser capacity is temporarily exhausted. Please try again after the next UTC day." : "The bank did not return a usable public CD quote for this ZIP. Use the official link to confirm availability.";
+      return Response.json({ error, source: source.url, locationSensitive: source.local, retrieval: quote.retrieval, retryAfter }, { status: retryAfter ? 503 : 424, headers: retryAfter ? { "Retry-After": String(retryAfter) } : undefined });
+    }
     return Response.json({ bank, zipCode, rates, source: source.url, locationSensitive: source.local, retrieval: quote.retrieval, retrievedAt: new Date().toISOString() }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return Response.json({ error: "The live bank quote is temporarily unavailable.", source: source.url, locationSensitive: source.local }, { status: 503 });
