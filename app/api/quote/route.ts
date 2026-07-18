@@ -7,7 +7,6 @@ const banks = {
   "Capital One": { url: "https://www.capitalone.com/bank/cds/online-cds/", local: false },
   Chase: { url: "https://www.chase.com/personal/savings/bank-cd", local: true },
   "Fifth Third": { url: "https://www.53.com/content/fifth-third/en/personal-banking/bank/savings/cds.html", local: true },
-  "Marcus by Goldman Sachs": { url: "https://www.marcus.com/us/en/savings/high-yield-cds", local: false },
   Regions: { url: "https://www.regions.com/personal-banking/savings-and-cds/cds", local: true },
   "Synchrony Bank": { url: "https://www.synchronybank.com/banking/cd-rates/", local: false },
 } as const;
