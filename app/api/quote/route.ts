@@ -137,6 +137,16 @@ function publicRatesFromText(text: string): Quote[] {
   return [...unique.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
 }
 
+async function applyZipCode(page: Awaited<ReturnType<Awaited<ReturnType<typeof puppeteer.launch>>["newPage"]>>, zipCode: string) {
+  const zipInput = await page.$('input[autocomplete="postal-code"], input[name*="zip" i], input[id*="zip" i], input[aria-label*="zip" i], input[placeholder*="zip" i]');
+  if (!zipInput) return;
+  await zipInput.click({ clickCount: 3 });
+  await page.keyboard.press("Control+A");
+  await zipInput.type(zipCode);
+  await page.keyboard.press("Enter");
+  await page.waitForNetworkIdle({ idleTime: 500, timeout: 5_000 }).catch(() => undefined);
+}
+
 async function readRenderedRatePage(url: string, zipCode: string): Promise<Quote[]> {
   return Promise.race([
     readRenderedRatePageInternal(url, zipCode),
@@ -154,6 +164,7 @@ async function readRenderedRatePageInternal(url: string, zipCode: string): Promi
     // Some bank pages keep analytics connections open; a navigation timeout
     // does not mean their public rate table failed to render.
     await page.goto(addZipParameter(url, zipCode), { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => null);
+    await applyZipCode(page, zipCode).catch(() => undefined);
     const [html, visibleText] = await Promise.all([
       page.content(),
       page.evaluate(() => document.body?.innerText ?? ""),
