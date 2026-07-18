@@ -15,6 +15,13 @@
       "when": 1784393389440,
       "tag": "0001_robust_ozymandias",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1784396089433,
+      "tag": "0002_majestic_wallop",
+      "breakpoints": true
     }
   ]
 }
