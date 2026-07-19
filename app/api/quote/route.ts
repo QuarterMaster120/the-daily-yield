@@ -23,7 +23,6 @@ const banks: Record<string, BankSource> = {
   "Fifth Third": { url: "https://openonline.53.com/apps/oc/rates.html?productType=cd", local: true, browserRequired: true, adapter: "fifth-third", zipInput: "#enter-zip", zipSubmit: "form.zip-form button" },
   "Morgan Stanley": { url: "https://www.morganstanley.com/what-we-do/wealth-management/cd-savings", local: true },
   PNC: { url: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html", local: true, browserRequired: true, zipInput: "#zip-overlay #zipCodeUpdate, #zip-overlay-01 #zipCode", zipSubmit: "#form-button-1275034976, #form-button-1195175473" },
-  Regions: { url: "https://www.regions.com/personal-banking/savings/cd-account", local: true },
   "Synchrony Bank": { url: "https://www.synchronybank.com/banking/cd-rates/", local: false },
   "TD Bank": { url: "https://www.td.com/us/en/personal-banking/certificates-of-deposit", local: true },
   Truist: { url: "https://www.truist.com/savings/certificate-of-deposit", local: true },

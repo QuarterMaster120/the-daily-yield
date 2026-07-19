@@ -1,7 +1,7 @@
 import { getDb } from "../../../db";
 import { subscribers } from "../../../db/schema";
 
-const banks = ["American Express", "Bank of America", "Capital One", "Chase", "Citizens Bank", "Fifth Third", "Morgan Stanley", "PNC", "Regions", "Synchrony Bank", "TD Bank", "Truist", "U.S. Bank", "Wells Fargo"];
+const banks = ["American Express", "Bank of America", "Capital One", "Chase", "Citizens Bank", "Fifth Third", "Morgan Stanley", "PNC", "Synchrony Bank", "TD Bank", "Truist", "U.S. Bank", "Wells Fargo"];
 const treasuryTerms = ["3 Mo", "6 Mo", "1 Yr", "2 Yr", "5 Yr", "10 Yr", "30 Yr"];
 
 export async function POST(request: Request) {
