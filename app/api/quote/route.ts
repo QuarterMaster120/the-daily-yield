@@ -16,7 +16,7 @@ const banks: Record<string, BankSource> = {
   "American Express": { url: "https://www.americanexpress.com/en-us/banking/online-savings/cd-account/", local: false },
   "Bank of America": { url: "https://www.bankofamerica.com/deposits/bank-cds/cd-accounts/", local: true },
   "Capital One": { url: "https://www.capitalone.com/bank/cds/online-cds/", local: false },
-  Chase: { url: "https://www.chase.com/digital/disclosures-and-interest-rates-personal", local: true, browserRequired: true, adapter: "chase" },
+  Chase: { url: "https://www.chase.com/digital/disclosures-and-interest-rates-personal", local: true, adapter: "chase" },
   "Citizens Bank": { url: "https://www.citizensbank.com/savings/cds-certificates-of-deposit/online-certificate-of-deposit.page", local: true, browserRequired: true, zipInput: "#cbds-textInput", zipSubmit: "#dcom-zip-modal-submit" },
   "Fifth Third": { url: "https://openonline.53.com/apps/oc/rates.html?productType=cd", local: true, browserRequired: true, adapter: "fifth-third", zipInput: "#enter-zip", zipSubmit: "form.zip-form button" },
   "Morgan Stanley": { url: "https://www.morganstanley.com/what-we-do/wealth-management/cd-savings", local: true },
@@ -119,6 +119,10 @@ function parseAdjacentRateTerms(text: string): Quote[] {
 
 async function readPublicRatePage(source: BankSource, zipCode: string) {
   const { url } = source;
+  if (source.adapter === "chase") {
+    const rates = await chaseRates(zipCode);
+    return { rates, retrieval: rates.length ? "official-feed" : "unavailable" };
+  }
   {
     const directText = await readPublicText(`${url}${url.includes("?") ? "&" : "?"}zip=${zipCode}`, { headers: browserHeaders, cf: { cacheTtl: 0 } }, 12_000);
     if (directText) {
@@ -174,19 +178,19 @@ function publicRatesFromText(text: string): Quote[] {
   return [...unique.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
 }
 
-function chaseRateSheetRates(text: string): Quote[] {
-  const start = text.search(/#\s*CERTIFICATE OF DEPOSIT\s*\(CD\)/i);
-  if (start < 0) return [];
-  const section = text.slice(start).split(/Rates specific for CD ladders/i)[0];
+async function chaseRates(zipCode: string): Promise<Quote[]> {
+  const response = await fetch("https://www.chase.com/bin/services/cdRate", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json", Referer: banks.Chase.url },
+    body: new URLSearchParams({ zipcode: zipCode, type: "CD", language: "en" }).toString(),
+  }).catch(() => null);
+  if (!response?.ok) return [];
+  const data = await response.json() as { ratesData?: { rates?: Record<string, string[]> } };
   const rates = new Map<string, Quote>();
-  for (const line of section.split(/\r?\n/)) {
-    const months = [...line.matchAll(/\b(\d{1,2})m\b/gi)].map((match) => Number(match[1]));
-    const percentages = [...line.matchAll(/\b\d+(?:\.\d+)?%/g)].map((match) => Number(match[0].slice(0, -1)));
-    // Chase lists three relationship tiers (interest/APY) followed by the
-    // standard interest/APY pair. The eighth percentage is standard APY.
-    const apy = percentages[7];
-    if (!months.length || !Number.isFinite(apy)) continue;
-    for (const month of months) rates.set(`${month}-${apy}`, { months: month, term: `${month} ${month === 1 ? "Month" : "Months"}`, apy });
+  for (const [label, values] of Object.entries(data.ratesData?.rates ?? {})) {
+    const months = Number(label.match(/^(\d+)-Month$/i)?.[1]);
+    const apy = Number(values?.[0]?.match(/\d+(?:\.\d+)?/)?.[0]);
+    if (Number.isFinite(months) && Number.isFinite(apy)) rates.set(`${months}-${apy}`, { months, term: `${months} ${months === 1 ? "Month" : "Months"}`, apy });
   }
   return [...rates.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
 }
@@ -202,26 +206,6 @@ function fifthThirdRates(text: string): Quote[] {
 }
 
 type BrowserPage = Awaited<ReturnType<Awaited<ReturnType<typeof puppeteer.launch>>["newPage"]>>;
-
-async function chaseRates(page: BrowserPage, zipCode: string): Promise<Quote[]> {
-  const zipInput = await page.$('input[name="ZIP code"]');
-  if (!zipInput) return [];
-  await zipInput.click({ clickCount: 3 });
-  await page.keyboard.press("Control+A");
-  await zipInput.type(zipCode);
-  const submitted = await page.evaluate(() => {
-    const button = [...document.querySelectorAll("button")].find((candidate) => /see rates/i.test(candidate.textContent ?? ""));
-    if (!button) return false;
-    (button as HTMLButtonElement).click();
-    return true;
-  });
-  if (!submitted) return [];
-  await page.waitForFunction(() => [...document.querySelectorAll("a")].some((link) => /\/ratesheets\/pdfs\/[a-z0-9]+\.pdf/i.test(link.getAttribute("href") ?? "")), { timeout: 12_000 }).catch(() => undefined);
-  const document = await page.evaluate(() => [...document.querySelectorAll("a")].map((link) => link.getAttribute("href") ?? "").find((href) => /\/ratesheets\/pdfs\/[a-z0-9]+\.pdf/i.test(href))?.split("/").pop() ?? "");
-  if (!/^[a-z0-9]+\.pdf$/i.test(document)) return [];
-  const rateSheet = await readPublicText(`https://r.jina.ai/http://www.chase.com/content/dam/chase-ux/ratesheets/pdfs/${document}`, { headers: { Accept: "text/plain" }, cf: { cacheTtl: 300 } }, 12_000);
-  return chaseRateSheetRates(rateSheet);
-}
 
 async function applyZipCode(page: BrowserPage, source: BankSource, zipCode: string) {
   const genericZipInput = 'input[autocomplete="postal-code"], input[name*="zip" i], input[id*="zip" i], input[aria-label*="zip" i], input[placeholder*="zip" i]';
@@ -314,10 +298,6 @@ async function readRenderedRatePage(source: BankSource, zipCode: string): Promis
     // synthetic ZIP query parameter can bypass or disrupt that client flow.
     const navigationUrl = source.adapter === "chase" || source.adapter === "fifth-third" ? source.url : addZipParameter(source.url, zipCode);
     await page.goto(navigationUrl, { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => null);
-    if (source.adapter === "chase") {
-      const rates = await chaseRates(page, zipCode).catch(() => []);
-      return { rates, reason: rates.length ? undefined : "failed" };
-    }
     if (source.adapter === "wells-fargo") {
       const rates = await wellsFargoRates(page, zipCode).catch(() => []);
       if (rates.length) return { rates };
