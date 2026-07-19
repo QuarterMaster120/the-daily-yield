@@ -15,7 +15,6 @@ type BankSource = {
 };
 
 const banks: Record<string, BankSource> = {
-  "Ally Bank": { url: "https://www.ally.com/bank/cd-rates/", local: false },
   "American Express": { url: "https://www.americanexpress.com/en-us/banking/online-savings/cd-account/", local: false },
   "Bank of America": { url: "https://www.bankofamerica.com/deposits/bank-cds/cd-accounts/", local: true },
   "Capital One": { url: "https://www.capitalone.com/bank/cds/online-cds/", local: false },

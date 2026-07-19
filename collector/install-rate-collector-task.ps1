@@ -12,7 +12,7 @@ New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
 
 $command = "Set-Location -LiteralPath '$PSScriptRoot'; & '$node' '$collector' *>> '$log'"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command `"$command`""
-$trigger = New-ScheduledTaskTrigger -Daily -At 4:45AM
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At 4:45AM
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 10) -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Description "Collects Fifth Third public ZIP-specific CD rates for Rate Ledger before the 5 AM ET email cycle." -Force | Out-Null
-Write-Output "Installed '$TaskName'. It runs daily at 4:45 AM local time and writes diagnostics to $log."
+Write-Output "Installed '$TaskName'. It runs Monday through Friday at 4:45 AM local time and writes diagnostics to $log."

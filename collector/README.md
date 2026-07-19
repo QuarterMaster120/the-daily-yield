@@ -10,7 +10,7 @@ Run one manual verification after the tokens are configured:
 npm run collector:fifth-third -- --dry-run
 ```
 
-Install the daily 4:45 AM local task:
+Install the weekday 4:45 AM local task:
 
 ```powershell
 .\collector\install-rate-collector-task.ps1
