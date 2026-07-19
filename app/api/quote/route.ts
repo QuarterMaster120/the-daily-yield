@@ -310,7 +310,10 @@ async function readRenderedRatePage(source: BankSource, zipCode: string): Promis
     await page.setViewport({ width: 1440, height: 1000 });
     // Some bank pages keep analytics connections open; a navigation timeout
     // does not mean their public rate table failed to render.
-    await page.goto(addZipParameter(source.url, zipCode), { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => null);
+    // Chase and Fifth Third require their own public form submission; adding a
+    // synthetic ZIP query parameter can bypass or disrupt that client flow.
+    const navigationUrl = source.adapter === "chase" || source.adapter === "fifth-third" ? source.url : addZipParameter(source.url, zipCode);
+    await page.goto(navigationUrl, { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => null);
     if (source.adapter === "chase") {
       const rates = await chaseRates(page, zipCode).catch(() => []);
       return { rates, reason: rates.length ? undefined : "failed" };
