@@ -34,13 +34,18 @@ function TreasuryCanvas({ points, period }: { points: RatePoint[]; period: "mont
     const context = element.getContext("2d"); if (!context) return;
     const rect = element.getBoundingClientRect(); const ratio = window.devicePixelRatio || 1;
     element.width = rect.width * ratio; element.height = rect.height * ratio; context.scale(ratio, ratio);
-    const width = rect.width; const height = rect.height; const inset = { x: 16, y: 24 }; const values = points.map((point) => point.rate); const min = Math.min(...values) - .05; const max = Math.max(...values) + .05;
+    const width = rect.width; const height = rect.height; const inset = { x: 34, y: 24, bottom: 36 }; const values = points.map((point) => point.rate); const min = Math.min(...values) - .05; const max = Math.max(...values) + .05;
     context.clearRect(0, 0, width, height); context.strokeStyle = "#e6eae5"; context.lineWidth = 1;
-    for (let i = 0; i < 4; i++) { const y = inset.y + (i * (height - inset.y * 2)) / 3; context.beginPath(); context.moveTo(inset.x, y); context.lineTo(width - inset.x, y); context.stroke(); }
-    const position = (index: number, value: number) => ({ x: inset.x + (index * (width - inset.x * 2)) / (points.length - 1), y: height - inset.y - ((value - min) / (max - min || 1)) * (height - inset.y * 2) });
+    const plotHeight = height - inset.y - inset.bottom;
+    for (let i = 0; i < 4; i++) { const y = inset.y + (i * plotHeight) / 3; context.beginPath(); context.moveTo(inset.x, y); context.lineTo(width - inset.x, y); context.stroke(); }
+    const position = (index: number, value: number) => ({ x: inset.x + (index * (width - inset.x * 2)) / (points.length - 1), y: height - inset.bottom - ((value - min) / (max - min || 1)) * plotHeight });
     context.beginPath(); points.forEach((point, index) => { const p = position(index, point.rate); index ? context.lineTo(p.x, p.y) : context.moveTo(p.x, p.y); }); context.strokeStyle = "#126b4a"; context.lineWidth = 2.5; context.stroke();
     const final = position(points.length - 1, points.at(-1)!.rate); context.fillStyle = "#dff36a"; context.beginPath(); context.arc(final.x, final.y, 5, 0, Math.PI * 2); context.fill(); context.strokeStyle = "#126b4a"; context.lineWidth = 2; context.stroke();
-    context.fillStyle = "#64716d"; context.font = "11px system-ui"; context.fillText(`${max.toFixed(2)}%`, inset.x, 13); context.fillText(`${min.toFixed(2)}%`, inset.x, height - 5); context.fillText(period === "month" ? "Daily close" : "Weekly close", width - 86, height - 5);
+    const formatDate = (value: string) => { const [year, month, day] = value.split("-"); return period === "month" ? `${Number(month)}/${Number(day)}` : `${Number(month)}/${Number(day)}/${year.slice(-2)}`; };
+    const labels = [...new Set(Array.from({ length: Math.min(4, points.length) }, (_, index) => Math.round(index * (points.length - 1) / (Math.min(4, points.length) - 1))))];
+    context.fillStyle = "#64716d"; context.font = "11px system-ui"; context.textAlign = "left"; context.fillText(`${max.toFixed(2)}%`, 0, 13); context.fillText(`${min.toFixed(2)}%`, 0, height - inset.bottom + 3);
+    context.textAlign = "center"; context.font = "10px system-ui";
+    labels.forEach((index) => { const x = position(index, points[index].rate).x; context.beginPath(); context.moveTo(x, height - inset.bottom); context.lineTo(x, height - inset.bottom + 4); context.stroke(); context.fillText(formatDate(points[index].date), x, height - 7); });
   }, [points, period]);
   return <canvas ref={canvas} className="chart" aria-label={`${period} Treasury closing-rate chart`} role="img" />;
 }
