@@ -28,7 +28,7 @@ async function request(path, options = {}) {
 function parseRates(text) {
   const section = text.split(/Standard CD Interest Rates/i)[0];
   const rates = new Map();
-  for (const match of section.matchAll(/(\d{1,2})\s*Month\s+CD\s+Promo[\s\S]{0,160}?(\d(?:\.\d+)?)%\s*(?:Interest Rate)?\s*(\d(?:\.\d+)?)%\s*(?:APY|Annual Percentage Yield)/gi)) {
+  for (const match of section.matchAll(/(\d{1,2})\s*Month\s+CD\s+Promo[\s\S]{0,160}?(\d(?:\.\d+)?)%[\s\S]{0,80}?(\d(?:\.\d+)?)%/gi)) {
     const months = Number(match[1]); const apy = Number(match[3]);
     if (Number.isInteger(months) && months >= 1 && months <= 120 && Number.isFinite(apy) && apy >= 0 && apy <= 20) rates.set(months, { months, term: `${months} ${months === 1 ? "Month" : "Months"}`, apy });
   }
