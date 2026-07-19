@@ -14,8 +14,8 @@ export async function generateMetadata(): Promise<Metadata> {
     metadataBase: new URL(`${protocol}://${host}`),
     title: "Yield Atlas | Daily CD & Treasury rates",
     description: "Track closing CD and Treasury rates. Get the daily 5 AM email.",
-    openGraph: { title: "Yield Atlas", description: "Daily CD + Treasury closes", images: ["/og.png"] },
-    twitter: { card: "summary_large_image", title: "Yield Atlas", images: ["/og.png"] },
+  openGraph: { title: "Yield Atlas", description: "Daily CD + Treasury closes", images: ["/og-yield-atlas.png"] },
+  twitter: { card: "summary_large_image", title: "Yield Atlas", images: ["/og-yield-atlas.png"] },
   };
 }
 
