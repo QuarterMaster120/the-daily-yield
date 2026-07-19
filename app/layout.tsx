@@ -9,13 +9,13 @@ const serif = Playfair_Display({ variable: "--font-serif", subsets: ["latin"] })
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "https";
-  const host = requestHeaders.get("host") ?? "rate-ledger.local";
+  const host = requestHeaders.get("host") ?? "yield-atlas.local";
   return {
     metadataBase: new URL(`${protocol}://${host}`),
-    title: "Rate Ledger | Daily CD & Treasury rates",
+    title: "Yield Atlas | Daily CD & Treasury rates",
     description: "Track closing CD and Treasury rates. Get the daily 5 AM email.",
-    openGraph: { title: "Rate Ledger", description: "Daily CD + Treasury closes", images: ["/og.png"] },
-    twitter: { card: "summary_large_image", title: "Rate Ledger", images: ["/og.png"] },
+    openGraph: { title: "Yield Atlas", description: "Daily CD + Treasury closes", images: ["/og.png"] },
+    twitter: { card: "summary_large_image", title: "Yield Atlas", images: ["/og.png"] },
   };
 }
 

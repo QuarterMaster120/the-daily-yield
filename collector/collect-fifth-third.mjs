@@ -6,7 +6,7 @@ const sourceUrls = {
   "Fifth Third": "https://openonline.53.com/apps/oc/rates.html?productType=cd",
   PNC: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html",
 };
-const defaultEndpoint = "https://rate-ledger-daily.startcodex.workers.dev";
+const defaultEndpoint = "https://yield-atlas.startcodex.workers.dev";
 const edgeCandidates = [
   process.env.RATE_COLLECTOR_EDGE_PATH,
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
