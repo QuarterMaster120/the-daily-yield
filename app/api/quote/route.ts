@@ -11,17 +11,17 @@ type BankSource = {
   browserRequired?: boolean;
   zipInput?: string;
   zipSubmit?: string;
-  adapter?: "chase" | "fifth-third" | "wells-fargo";
+  adapter?: "chase" | "citizens" | "fifth-third" | "pnc" | "wells-fargo";
 };
 
 const banks: Record<string, BankSource> = {
   "Bank of America": { url: "https://www.bankofamerica.com/deposits/bank-cds/cd-accounts/", local: true },
   "Capital One": { url: "https://www.capitalone.com/bank/cds/online-cds/", local: false },
   Chase: { url: "https://www.chase.com/digital/disclosures-and-interest-rates-personal", local: true, adapter: "chase" },
-  "Citizens Bank": { url: "https://www.citizensbank.com/savings/cds-certificates-of-deposit/online-certificate-of-deposit.page", local: true, browserRequired: true, zipInput: "#cbds-textInput", zipSubmit: "#dcom-zip-modal-submit" },
+  "Citizens Bank": { url: "https://www.citizensbank.com/savings/cds-certificates-of-deposit/online-certificate-of-deposit.page", local: true, adapter: "citizens" },
   "Fifth Third": { url: "https://openonline.53.com/apps/oc/rates.html?productType=cd", local: true, browserRequired: true, adapter: "fifth-third", zipInput: "#enter-zip", zipSubmit: "form.zip-form button" },
   "Morgan Stanley": { url: "https://www.morganstanley.com/what-we-do/wealth-management/cd-savings", local: true },
-  PNC: { url: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html", local: true, browserRequired: true, zipInput: "#zip-overlay #zipCodeUpdate, #zip-overlay-01 #zipCode", zipSubmit: "#form-button-1275034976, #form-button-1195175473" },
+  PNC: { url: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html", local: true, browserRequired: true, adapter: "pnc", zipInput: "#zip-overlay #zipCodeUpdate, #zip-overlay-01 #zipCode", zipSubmit: "#form-button-1275034976, #form-button-1195175473" },
   "Synchrony Bank": { url: "https://www.synchronybank.com/banking/cd-rates/", local: false },
   "TD Bank": { url: "https://www.td.com/us/en/personal-banking/certificates-of-deposit", local: true },
   Truist: { url: "https://www.truist.com/savings/certificate-of-deposit", local: true },
@@ -53,10 +53,10 @@ async function readBoundedText(response: Response, maximumBytes = 1_000_000) {
   }
 }
 
-async function readPublicText(url: string, init: PublicFetchInit, timeoutMs: number) {
+async function readPublicText(url: string, init: PublicFetchInit, timeoutMs: number, maximumBytes = 1_000_000) {
   const controller = new AbortController();
   const request = fetch(url, { ...init, signal: controller.signal })
-    .then((response) => response.ok ? readBoundedText(response) : "")
+    .then((response) => response.ok ? readBoundedText(response, maximumBytes) : "")
     .catch(() => "");
   const deadline = new Promise<string>((resolve) => setTimeout(() => {
     controller.abort();
@@ -123,6 +123,14 @@ async function readPublicRatePage(source: BankSource, zipCode: string) {
     const rates = await chaseRates(zipCode);
     return { rates, retrieval: rates.length ? "official-feed" : "unavailable" };
   }
+  if (source.adapter === "citizens") {
+    const rates = await citizensRates(zipCode);
+    return { rates, retrieval: rates.length ? "official-feed" : "unavailable" };
+  }
+  if (source.adapter === "wells-fargo") {
+    const rates = await wellsFargoDirectRates(zipCode);
+    return { rates, retrieval: rates.length ? "official-feed" : "official-source-unavailable" };
+  }
   {
     const directText = await readPublicText(`${url}${url.includes("?") ? "&" : "?"}zip=${zipCode}`, { headers: browserHeaders, cf: { cacheTtl: 0 } }, 12_000);
     if (directText) {
@@ -178,6 +186,13 @@ function publicRatesFromText(text: string): Quote[] {
   return [...unique.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
 }
 
+async function publicJsonThroughReader(url: string, timeoutMs: number, maximumBytes: number) {
+  const text = await readPublicText(`https://r.jina.ai/http://${url.replace(/^https?:\/\//, "")}`, { headers: { Accept: "text/plain" }, cf: { cacheTtl: 300 } }, timeoutMs, maximumBytes);
+  const marker = "Markdown Content:\n";
+  const offset = text.indexOf(marker);
+  return offset >= 0 ? text.slice(offset + marker.length) : text;
+}
+
 async function chaseRates(zipCode: string): Promise<Quote[]> {
   const response = await fetch("https://www.chase.com/bin/services/cdRate", {
     method: "POST",
@@ -195,6 +210,41 @@ async function chaseRates(zipCode: string): Promise<Quote[]> {
   return [...rates.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
 }
 
+function citizensQuote(label: string, apy: unknown): Quote | null {
+  const parsed = term(label); const rate = rateFromUnknown(apy);
+  return parsed && rate !== null ? { ...parsed, apy: rate } : null;
+}
+
+async function citizensRates(zipCode: string): Promise<Quote[]> {
+  // Citizens blocks Cloudflare worker egress for these public JSON endpoints.
+  // Read-only Jina access preserves the banks' document unchanged and keeps the
+  // site on the same free, official-source data path.
+  const regionTexts = await Promise.all([
+    publicJsonThroughReader(`https://services.citizensbank.com/regionalization/api/query?zipcode=${zipCode}`, 20_000, 10_000),
+    publicJsonThroughReader(`https://www.citizensbank.com/apps/ApiProxy/RegionalizationApi/api/region/GetRegion?ZipCode=${zipCode}`, 20_000, 10_000),
+  ]);
+  const region = regionTexts.flatMap((regionalText) => {
+    try {
+      const data = JSON.parse(regionalText) as { Region?: string; region?: string; RegionZipCodeMapping?: { Region?: string }[] };
+      return [data.RegionZipCodeMapping?.[0]?.Region, data.Region, data.region].filter((value): value is string => typeof value === "string" && value.length > 0);
+    } catch { return []; }
+  })[0] ?? "";
+  if (!region) return [];
+  const ratesText = await publicJsonThroughReader("https://www.citizensbank.com/assets/CB_resources/json/rates/ODS.json", 30_000, 2_000_000);
+  let data: unknown;
+  try { data = JSON.parse(ratesText); } catch { return []; }
+  const source = Array.isArray(data) ? data : Object.values(data as Record<string, unknown>);
+  const brands = source.filter((item): item is { Brand?: string; BrandData?: { RegionCode?: string; RegionData?: { ProductSetData?: { Product?: string; ProductOptions?: Record<string, unknown>[] }[] } }[] } => Boolean(item) && typeof item === "object");
+  const rates = new Map<string, Quote>();
+  for (const brand of brands) if (brand.Brand === "citizensbank") for (const regionData of brand.BrandData ?? []) if (regionData.RegionCode === region) for (const set of regionData.RegionData?.ProductSetData ?? []) if (set.Product === "CD") for (const option of set.ProductOptions ?? []) {
+    if (option.customerType !== "CONSUMER" || option.ProductLevelCode !== "NOR") continue;
+    const quote = citizensQuote(String(option.ProductName ?? ""), option.CurrentAPY);
+    const existing = quote ? rates.get(String(quote.months)) : undefined;
+    if (quote && (!existing || quote.apy > existing.apy)) rates.set(String(quote.months), quote);
+  }
+  return [...rates.values()].sort((a, b) => a.months - b.months || a.apy - b.apy);
+}
+
 function fifthThirdRates(text: string): Quote[] {
   const promotionalSection = text.split(/Standard CD Interest Rates/i)[0];
   const rates = new Map<string, Quote>();
@@ -206,7 +256,7 @@ function fifthThirdRates(text: string): Quote[] {
 }
 
 async function savedDesktopRates(bank: string, zipCode: string): Promise<{ rates: Quote[]; retrievedAt?: string }> {
-  if (bank !== "Fifth Third") return { rates: [] };
+  if (bank !== "Citizens Bank" && bank !== "Fifth Third" && bank !== "PNC") return { rates: [] };
   const rows = await getDb().select({ term: bankRateObservations.term, termMonths: bankRateObservations.termMonths, apy: bankRateObservations.apy, observedAt: bankRateObservations.observedAt }).from(bankRateObservations).where(and(eq(bankRateObservations.bank, bank), eq(bankRateObservations.zipCode, zipCode))).orderBy(desc(bankRateObservations.observedAt)).limit(12);
   const latest = rows[0]?.observedAt;
   if (!latest) return { rates: [] };
@@ -290,6 +340,27 @@ async function wellsFargoRates(page: BrowserPage, zipCode: string): Promise<Quot
   return rates.size ? [...rates.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12) : structuredRates(payload);
 }
 
+async function wellsFargoDirectRates(zipCode: string): Promise<Quote[]> {
+  const id = () => crypto.randomUUID();
+  const headers = () => ({ "Content-Type": "application/json", "X-WF-CLIENT-ID": "WU", "X-WF-CMP-ID": "CONSUMER_DEPOSITS_RATES", "X-REQUEST-ID": id(), "X-CORRELATION-ID": id(), "X-WF-REQUEST-DATE": new Date().toISOString() });
+  const payloads = await Promise.all(["40", "128"].map(async (code) => {
+    const response = await fetch("https://www.wellsfargo.com/xapi/product-service-research/products-rates/v1/deposit/rates", { method: "POST", headers: headers(), body: JSON.stringify({ sub_product_code: [code], product_type: ["c_cd"], rate_type: "standard", zip_code: zipCode }) }).catch(() => null);
+    return response?.ok ? response.json().catch(() => null) : null;
+  }));
+  type WellsRate = { min_amount?: string | number; min_apr?: string | number; term_start?: string | number; term_end?: string | number };
+  type WellsProduct = { special_rate_flag?: boolean; rates?: WellsRate[] };
+  const rates = new Map<string, Quote>();
+  for (const payload of payloads) for (const product of (payload as { data?: { deposit_rates?: WellsProduct[] } } | null)?.data?.deposit_rates ?? []) for (const item of product.rates ?? []) {
+    const minimum = Number(String(item.min_amount ?? "").replace(/[$,]/g, ""));
+    if ((!product.special_rate_flag && minimum !== 0) || (product.special_rate_flag && minimum !== 5_000)) continue;
+    const apy = rateFromUnknown(item.min_apr); const start = rateFromUnknown(item.term_start); const end = rateFromUnknown(item.term_end);
+    const months = start !== null ? Math.round(start) : end !== null ? Math.round(end / 30) : 0;
+    if (apy === null || months < 1 || months > 120) continue;
+    rates.set(`${months}-${apy}`, { months, term: `${months} ${months === 1 ? "Month" : "Months"}`, apy });
+  }
+  return [...rates.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
+}
+
 type BrowserRead = { rates: Quote[]; reason?: "rate-limited" | "blocked" | "failed" };
 
 async function readRenderedRatePage(source: BankSource, zipCode: string): Promise<BrowserRead> {
@@ -305,7 +376,7 @@ async function readRenderedRatePage(source: BankSource, zipCode: string): Promis
     // does not mean their public rate table failed to render.
     // Chase and Fifth Third require their own public form submission; adding a
     // synthetic ZIP query parameter can bypass or disrupt that client flow.
-    const navigationUrl = source.adapter === "chase" || source.adapter === "fifth-third" ? source.url : addZipParameter(source.url, zipCode);
+    const navigationUrl = source.adapter === "chase" || source.adapter === "fifth-third" || source.adapter === "pnc" ? source.url : addZipParameter(source.url, zipCode);
     await page.goto(navigationUrl, { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => null);
     if (source.adapter === "wells-fargo") {
       const rates = await wellsFargoRates(page, zipCode).catch(() => []);
@@ -351,8 +422,11 @@ export async function GET(request: Request) {
   if (!/^\d{5}$/.test(zipCode)) return Response.json({ error: "Enter a five-digit U.S. ZIP code." }, { status: 400, headers: { "Cache-Control": "no-store" } });
   const source = banks[bank as keyof typeof banks];
   try {
-    const quote = bank === "Synchrony Bank" ? { rates: await synchronyRates(), retrieval: "official-feed" } : await readPublicRatePage(source, zipCode);
-    const saved = !quote.rates.length ? await savedDesktopRates(bank, zipCode).catch(() => ({ rates: [] })) : { rates: [] };
+    // Citizens is collected locally before the email cycle because its upstream
+    // public feed rejects Cloudflare Worker requests. Prefer that fresh ZIP data.
+    const earlySaved = bank === "Citizens Bank" ? await savedDesktopRates(bank, zipCode).catch(() => ({ rates: [] })) : { rates: [] };
+    const quote = earlySaved.rates.length ? { rates: [], retrieval: "unavailable" } : bank === "Synchrony Bank" ? { rates: await synchronyRates(), retrieval: "official-feed" } : await readPublicRatePage(source, zipCode);
+    const saved = earlySaved.rates.length ? earlySaved : !quote.rates.length ? await savedDesktopRates(bank, zipCode).catch(() => ({ rates: [] })) : { rates: [] };
     const rates = quote.rates.length ? quote.rates : saved.rates;
     if (!rates.length) {
       const retryAfter = "retryAfter" in quote ? quote.retryAfter : undefined;

@@ -1,6 +1,6 @@
-# Local Fifth Third collector
+# Local ZIP-gated CD collector
 
-This free collector uses the installed Microsoft Edge browser on this computer to read the public Fifth Third ZIP rate form. It uses an isolated, non-signed-in browser profile, queries only ZIPs that subscribers have selected, and never receives subscriber email addresses.
+This free collector reads the public Citizens Bank rate feed and uses the installed Microsoft Edge browser on this computer for the Fifth Third and PNC ZIP rate forms. It queries only ZIPs that subscribers have selected and never receives subscriber email addresses.
 
 It reads `RATE_COLLECTION_READ_TOKEN` and `RATE_COLLECTION_WRITE_TOKEN` from this Windows user's environment. Those credentials are intentionally not stored in source control or in the scheduled-task arguments.
 

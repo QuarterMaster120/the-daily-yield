@@ -2,7 +2,11 @@ import { getDb } from "../../../db";
 import { bankRateObservations } from "../../../db/schema";
 import { hasCollectorToken } from "../collector-auth";
 
-const sources = { "Fifth Third": "https://openonline.53.com/apps/oc/rates.html?productType=cd" } as const;
+const sources = {
+  "Citizens Bank": "https://www.citizensbank.com/assets/CB_resources/json/rates/ODS.json",
+  "Fifth Third": "https://openonline.53.com/apps/oc/rates.html?productType=cd",
+  PNC: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html",
+} as const;
 type IncomingRate = { term?: unknown; months?: unknown; apy?: unknown };
 type IncomingObservation = { bank?: unknown; zipCode?: unknown; rates?: unknown };
 
