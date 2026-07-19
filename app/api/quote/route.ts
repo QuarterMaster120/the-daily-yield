@@ -1,5 +1,8 @@
 import puppeteer, { type BrowserWorker } from "@cloudflare/puppeteer";
+import { and, desc, eq } from "drizzle-orm";
 import { env } from "cloudflare:workers";
+import { getDb } from "../../../db";
+import { bankRateObservations } from "../../../db/schema";
 
 type Quote = { term: string; months: number; apy: number };
 type BankSource = {
@@ -205,6 +208,15 @@ function fifthThirdRates(text: string): Quote[] {
   return [...rates.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
 }
 
+async function savedDesktopRates(bank: string, zipCode: string): Promise<{ rates: Quote[]; retrievedAt?: string }> {
+  if (bank !== "Fifth Third") return { rates: [] };
+  const rows = await getDb().select({ term: bankRateObservations.term, termMonths: bankRateObservations.termMonths, apy: bankRateObservations.apy, observedAt: bankRateObservations.observedAt }).from(bankRateObservations).where(and(eq(bankRateObservations.bank, bank), eq(bankRateObservations.zipCode, zipCode))).orderBy(desc(bankRateObservations.observedAt)).limit(12);
+  const latest = rows[0]?.observedAt;
+  if (!latest) return { rates: [] };
+  const rates = rows.filter((row) => row.observedAt === latest).map((row) => ({ term: row.term, months: row.termMonths, apy: row.apy })).sort((a, b) => a.months - b.months || a.apy - b.apy);
+  return { rates, retrievedAt: latest };
+}
+
 type BrowserPage = Awaited<ReturnType<Awaited<ReturnType<typeof puppeteer.launch>>["newPage"]>>;
 
 async function applyZipCode(page: BrowserPage, source: BankSource, zipCode: string) {
@@ -343,13 +355,14 @@ export async function GET(request: Request) {
   const source = banks[bank as keyof typeof banks];
   try {
     const quote = bank === "Synchrony Bank" ? { rates: await synchronyRates(), retrieval: "official-feed" } : await readPublicRatePage(source, zipCode);
-    const rates = quote.rates;
+    const saved = !quote.rates.length ? await savedDesktopRates(bank, zipCode).catch(() => ({ rates: [] })) : { rates: [] };
+    const rates = quote.rates.length ? quote.rates : saved.rates;
     if (!rates.length) {
       const retryAfter = "retryAfter" in quote ? quote.retryAfter : undefined;
       const error = retryAfter ? "ZIP-specific browser capacity is temporarily exhausted. Please try again shortly." : "The bank did not return a usable public CD quote for this ZIP. Use the official link to confirm availability.";
       return Response.json({ error, source: source.url, locationSensitive: source.local, retrieval: quote.retrieval, retryAfter }, { status: retryAfter ? 503 : 424, headers: retryAfter ? { "Retry-After": String(retryAfter), "Cache-Control": "no-store" } : { "Cache-Control": "no-store" } });
     }
-    return Response.json({ bank, zipCode, rates, source: source.url, locationSensitive: source.local, retrieval: quote.retrieval, retrievedAt: new Date().toISOString() }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ bank, zipCode, rates, source: source.url, locationSensitive: source.local, retrieval: quote.rates.length ? quote.retrieval : "desktop-public-page", retrievedAt: saved.retrievedAt ?? new Date().toISOString() }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return Response.json({ error: "The live bank quote is temporarily unavailable.", source: source.url, locationSensitive: source.local }, { status: 503, headers: { "Cache-Control": "no-store" } });
   }

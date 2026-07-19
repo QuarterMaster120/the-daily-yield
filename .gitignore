@@ -43,3 +43,5 @@ next-env.d.ts
 /dev.log
 /dev-error.log
 /rate-ledger.tgz
+/collector/.env
+/collector/logs/
