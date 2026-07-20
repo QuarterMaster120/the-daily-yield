@@ -307,7 +307,7 @@ async function sendToSubscriber(env: OutlookDigestEnv, subscriber: Subscriber, a
   }
 }
 
-async function deliverDigest(env: OutlookDigestEnv, runAt: Date, force: boolean) {
+async function deliverDigest(env: OutlookDigestEnv, runAt: Date, force: boolean, bypassIdempotency = false) {
   const eastern = easternDate(runAt);
   if (!force && !(["Mon", "Tue", "Wed", "Thu", "Fri"].includes(eastern.weekday) && eastern.hour === "05")) return { sent: 0, skipped: 0, skippedBySchedule: true };
   await ensureEmailTables(env);
@@ -317,7 +317,7 @@ async function deliverDigest(env: OutlookDigestEnv, runAt: Date, force: boolean)
   const quoteCache = new Map<string, Promise<BankQuote>>(); let sent = 0; let skipped = 0;
   for (const recipient of recipients) {
     try {
-      if (await sendToSubscriber(env, recipient, access, treasury, quoteCache, true) === "sent") sent += 1;
+      if (await sendToSubscriber(env, recipient, access, treasury, quoteCache, !bypassIdempotency) === "sent") sent += 1;
       else skipped += 1;
     } catch (error) {
       console.error(JSON.stringify({ event: "daily_digest_delivery_failed", error: error instanceof Error ? error.message : String(error) }));
@@ -332,7 +332,7 @@ export function runScheduledDigest(env: OutlookDigestEnv, scheduledTime: number)
 }
 
 export function runManualDigest(env: OutlookDigestEnv) {
-  return deliverDigest(env, new Date(), true);
+  return deliverDigest(env, new Date(), true, true);
 }
 
 async function startDeviceAuthorization(env: OutlookDigestEnv) {
