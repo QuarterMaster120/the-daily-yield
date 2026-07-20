@@ -1,10 +1,10 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { handleOutlookInternal, runScheduledDigest, type OutlookDigestEnv } from "./outlook-digest";
 
-interface Env {
+interface Env extends OutlookDigestEnv {
   ASSETS: Fetcher;
-  DB: D1Database;
   BROWSER: BrowserWorker;
   IMAGES: {
     input(stream: ReadableStream): {
@@ -30,6 +30,9 @@ const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
+    const internalResponse = await handleOutlookInternal(request, env);
+    if (internalResponse) return internalResponse;
+
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
       return handleImageOptimization(request, {
@@ -42,6 +45,11 @@ const worker = {
     }
 
     return handler.fetch(request, env, ctx);
+  },
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(runScheduledDigest(env, controller.scheduledTime).catch((error) => {
+      console.error(JSON.stringify({ event: "daily_digest_scheduler_failed", error: error instanceof Error ? error.message : String(error) }));
+    }));
   },
 };
 
