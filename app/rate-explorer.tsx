@@ -51,7 +51,7 @@ function TreasuryCanvas({ points, period }: { points: RatePoint[]; period: "mont
 }
 
 export function RateExplorer() {
-  const [selection, setSelection] = useState<Selection>("Chase"); const [zipCode, setZipCode] = useState(""); const [quotes, setQuotes] = useState<Quote[]>([]); const [history, setHistory] = useState<RatePoint[]>([]); const [period, setPeriod] = useState<"month" | "year">("month"); const [status, setStatus] = useState("Choose a bank and ZIP to generate a live quote chart."); const [source, setSource] = useState(""); const [locationSensitive, setLocationSensitive] = useState(false);
+  const [selection, setSelection] = useState<Selection>("Treasury 10 Year"); const [zipCode, setZipCode] = useState(""); const [quotes, setQuotes] = useState<Quote[]>([]); const [history, setHistory] = useState<RatePoint[]>([]); const [period, setPeriod] = useState<"month" | "year">("month"); const [status, setStatus] = useState("Loading official Treasury closes…"); const [source, setSource] = useState(""); const [locationSensitive, setLocationSensitive] = useState(false);
   const [email, setEmail] = useState(""); const [signupZip, setSignupZip] = useState(""); const [emailBanks, setEmailBanks] = useState<string[]>(banks); const [emailTreasury, setEmailTreasury] = useState<string[]>(emailTreasuryTerms); const [message, setMessage] = useState(""); const [treasury, setTreasury] = useState<Treasury | null>(null);
   const isTreasury = selection in treasuryTerms;
   useEffect(() => { fetch("/api/yield-curve").then((response) => response.ok ? response.json() : null).then((data) => data?.date && setTreasury(data)).catch(() => undefined); }, []);
