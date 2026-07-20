@@ -112,7 +112,7 @@ async function decryptToken(env: OutlookDigestEnv, value: string) {
 
 async function matchesSetupToken(request: Request, env: OutlookDigestEnv) {
   const supplied = request.headers.get("authorization")?.match(/^Bearer (.+)$/)?.[1];
-  const expected = env.OUTLOOK_SETUP_TOKEN ?? env.OUTLOOK_REFRESH_TOKEN ?? env.RATE_INGEST_TOKEN;
+  const expected = env.OUTLOOK_SETUP_TOKEN || env.OUTLOOK_REFRESH_TOKEN || env.RATE_INGEST_TOKEN;
   if (!supplied || !expected) return false;
   const [expectedHash, suppliedHash] = await Promise.all([
     crypto.subtle.digest("SHA-256", textEncoder.encode(expected)),
@@ -307,24 +307,32 @@ async function sendToSubscriber(env: OutlookDigestEnv, subscriber: Subscriber, a
   }
 }
 
-export async function runScheduledDigest(env: OutlookDigestEnv, scheduledTime: number) {
-  const runAt = new Date(scheduledTime);
+async function deliverDigest(env: OutlookDigestEnv, runAt: Date, force: boolean) {
   const eastern = easternDate(runAt);
-  if (!(["Mon", "Tue", "Wed", "Thu", "Fri"].includes(eastern.weekday) && eastern.hour === "05")) return { sent: 0, skipped: true };
+  if (!force && !(["Mon", "Tue", "Wed", "Thu", "Fri"].includes(eastern.weekday) && eastern.hour === "05")) return { sent: 0, skipped: 0, skippedBySchedule: true };
   await ensureEmailTables(env);
   const recipients = await subscribers(env);
-  if (!recipients.length) return { sent: 0, skipped: false };
+  if (!recipients.length) return { sent: 0, skipped: 0, skippedBySchedule: false };
   const [access, treasury] = await Promise.all([accessToken(env), treasurySnapshot(runAt)]);
-  const quoteCache = new Map<string, Promise<BankQuote>>(); let sent = 0;
+  const quoteCache = new Map<string, Promise<BankQuote>>(); let sent = 0; let skipped = 0;
   for (const recipient of recipients) {
     try {
       if (await sendToSubscriber(env, recipient, access, treasury, quoteCache, true) === "sent") sent += 1;
+      else skipped += 1;
     } catch (error) {
       console.error(JSON.stringify({ event: "daily_digest_delivery_failed", error: error instanceof Error ? error.message : String(error) }));
     }
   }
-  console.log(JSON.stringify({ event: "daily_digest_finished", sent, date: eastern.date }));
-  return { sent, skipped: false };
+  console.log(JSON.stringify({ event: "daily_digest_finished", sent, skipped, date: eastern.date }));
+  return { sent, skipped, skippedBySchedule: false };
+}
+
+export function runScheduledDigest(env: OutlookDigestEnv, scheduledTime: number) {
+  return deliverDigest(env, new Date(scheduledTime), false);
+}
+
+export function runManualDigest(env: OutlookDigestEnv) {
+  return deliverDigest(env, new Date(), true);
 }
 
 async function startDeviceAuthorization(env: OutlookDigestEnv) {
@@ -383,6 +391,10 @@ export async function handleOutlookInternal(request: Request, env: OutlookDigest
       await sendToSubscriber(env, subscriber, access, treasury, new Map(), false);
       return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
     } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to send the test." }, { status: 503, headers: { "Cache-Control": "no-store" } }); }
+  }
+  if (url.pathname === "/internal/outlook/send-today") {
+    try { return Response.json(await runManualDigest(env), { headers: { "Cache-Control": "no-store" } }); }
+    catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to send today's digest." }, { status: 503, headers: { "Cache-Control": "no-store" } }); }
   }
   return Response.json({ error: "Not found" }, { status: 404 });
 }
