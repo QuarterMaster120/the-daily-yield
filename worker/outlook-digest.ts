@@ -25,7 +25,7 @@ export interface OutlookDigestEnv {
 type SubscriberRow = { email: string; zip_code: string; bank_selections: string; treasury_selections: string };
 type Subscriber = { email: string; zipCode: string; banks: BankName[]; treasuries: TreasuryTerm[] };
 type TreasurySnapshot = { date: string; yields: Partial<Record<TreasuryTerm, number>> };
-type Quote = { term: string; months: number; apy: number };
+type Quote = { term: string; months: number; apy: number; balance?: string };
 type BankQuote = { source: string; rates: Quote[]; error?: string };
 type StoredConnection = { refresh_token_ciphertext: string; sender_email: string };
 type StoredDeviceAuthorization = { device_code_ciphertext: string; expires_at: number };
@@ -205,8 +205,8 @@ async function bankQuote(env: OutlookDigestEnv, bank: BankName, zipCode: string)
     const source = typeof payload.source === "string" ? payload.source : "";
     const rates = Array.isArray(payload.rates) ? payload.rates.flatMap((item) => {
       if (!item || typeof item !== "object") return [];
-      const quote = item as { term?: unknown; months?: unknown; apy?: unknown };
-      return typeof quote.term === "string" && typeof quote.months === "number" && typeof quote.apy === "number" && Number.isFinite(quote.apy) ? [{ term: quote.term, months: quote.months, apy: quote.apy }] : [];
+      const quote = item as { term?: unknown; months?: unknown; apy?: unknown; balance?: unknown };
+      return typeof quote.term === "string" && typeof quote.months === "number" && typeof quote.apy === "number" && Number.isFinite(quote.apy) ? [{ term: quote.term, months: quote.months, apy: quote.apy, balance: typeof quote.balance === "string" ? quote.balance : undefined }] : [];
     }) : [];
     return rates.length ? { source, rates } : { source, rates: [], error: typeof payload.error === "string" ? payload.error : "No current quote was returned." };
   } catch (error) {
@@ -223,15 +223,17 @@ function emailBody(subscriber: Subscriber, treasury: TreasurySnapshot, quotes: M
   const treasuryHtml = treasuryText.length ? `<section><h2>Treasury par yields <small>(official close: ${escapeHtml(treasury.date)})</small></h2><p><strong>${escapeHtml(treasuryText.join(" · "))}</strong><br><small><a href="${TREASURY_SOURCE}">U.S. Treasury source</a></small></p></section>` : "";
   const bankRows = subscriber.banks.map((bank) => {
     const quote = quotes.get(bank) ?? { source: "", rates: [], error: "No current quote was returned." };
-    const source = quote.source ? `<br><small><a href="${escapeHtml(quote.source)}">Official bank source</a></small>` : "";
-    const rateText = quote.rates.length ? quote.rates.map((rate) => `${rate.term}: ${rate.apy.toFixed(2)}%`).join(" · ") : `Unavailable — ${quote.error ?? "No current quote was returned."}`;
-    return `<tr><td><strong>${escapeHtml(bank)}</strong>${source}</td><td>${escapeHtml(rateText)}</td></tr>`;
+    const source = quote.source ? `<a class="bank-source" href="${escapeHtml(quote.source)}">Source</a>` : "";
+    const rateHtml = quote.rates.length
+      ? `<div class="rate-list">${quote.rates.map((rate) => `<span class="rate-chip">${escapeHtml(rate.term)}: <strong>${rate.apy.toFixed(2)}%</strong>${rate.balance ? ` <small>${escapeHtml(rate.balance)}</small>` : ""}</span>`).join("")}</div>`
+      : `<span class="unavailable">Unavailable — ${escapeHtml(quote.error ?? "No current quote was returned.")}</span>`;
+    return `<tr><td class="bank-cell"><strong>${escapeHtml(bank)}</strong>${source}</td><td class="rate-cell">${rateHtml}</td></tr>`;
   }).join("");
-  const banksHtml = bankRows ? `<section><h2>Bank CD offers</h2><table><thead><tr><th>Bank</th><th>Term / APY</th></tr></thead><tbody>${bankRows}</tbody></table></section>` : "";
+  const banksHtml = bankRows ? `<section><h2>Bank CD offers</h2><table class="rates-table" role="presentation"><thead><tr><th>Bank</th><th>Term / APY</th></tr></thead><tbody>${bankRows}</tbody></table></section>` : "";
   const subject = `Yield Atlas rate note — ${displayEasternDate(now)}`;
-  const html = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#172033;max-width:760px;margin:auto"><h1 style="font-size:22px">Yield Atlas rate note</h1><p>Prepared ${escapeHtml(displayEasternDate(now))} for ZIP <strong>${escapeHtml(subscriber.zipCode)}</strong>.</p>${treasuryHtml}${banksHtml}<p style="color:#5f6b7a;font-size:12px">Automated weekday update. Confirm current terms and disclosures with the issuing bank before acting.</p><style>table{border-collapse:collapse;width:100%}th,td{text-align:left;border-bottom:1px solid #d9e0e8;padding:10px 8px;vertical-align:top}h2{font-size:18px;margin:26px 0 8px}small{font-weight:normal;color:#5f6b7a}</style></body></html>`;
+  const html = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#172033;max-width:760px;margin:auto;padding:0 16px"><h1 style="font-size:22px">Yield Atlas rate note</h1><p>Prepared ${escapeHtml(displayEasternDate(now))} for ZIP <strong>${escapeHtml(subscriber.zipCode)}</strong>.</p>${treasuryHtml}${banksHtml}<p style="color:#5f6b7a;font-size:12px">Automated weekday update. Confirm current terms and disclosures with the issuing bank before acting.</p><style>table{border-collapse:collapse;width:100%}.rates-table{table-layout:fixed}th,td{text-align:left;border-bottom:1px solid #d9e0e8;padding:12px 8px;vertical-align:top}.bank-cell{width:126px}.bank-source{display:block;margin-top:6px;font-size:12px}.rate-list{line-height:1.5}.rate-chip{display:inline-block;margin:0 8px 6px 0;white-space:nowrap}.rate-chip small{margin-left:3px}.unavailable{line-height:1.45}h2{font-size:18px;margin:26px 0 8px}small{font-weight:normal;color:#5f6b7a}@media only screen and (max-width:600px){.rates-table,.rates-table tbody,.rates-table tr,.rates-table td{display:block;width:100%!important;box-sizing:border-box}.rates-table thead{display:none}.rates-table tr{border-bottom:1px solid #d9e0e8;padding:12px 0}.rates-table td{border:0;padding:0}.rates-table .bank-cell{font-size:17px;margin-bottom:9px}.rates-table .bank-source{display:inline;margin-left:8px}.rates-table .rate-chip{display:block;margin:0 0 6px;white-space:normal}}</style></body></html>`;
   const plain = [subject, `Prepared for ZIP ${subscriber.zipCode}.`, treasuryText.length ? `Treasury par yields (${treasury.date}): ${treasuryText.join(" · ")}` : "", ...subscriber.banks.map((bank) => {
-    const quote = quotes.get(bank); const value = quote?.rates.length ? quote.rates.map((rate) => `${rate.term}: ${rate.apy.toFixed(2)}%`).join(" · ") : `Unavailable — ${quote?.error ?? "No current quote was returned."}`;
+    const quote = quotes.get(bank); const value = quote?.rates.length ? quote.rates.map((rate) => `${rate.term}: ${rate.apy.toFixed(2)}%${rate.balance ? ` (${rate.balance})` : ""}`).join(" · ") : `Unavailable — ${quote?.error ?? "No current quote was returned."}`;
     return `${bank}: ${value}`;
   })].filter(Boolean).join("\n\n");
   return { subject, html, plain };

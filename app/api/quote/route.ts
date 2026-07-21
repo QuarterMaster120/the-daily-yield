@@ -4,18 +4,18 @@ import { env } from "cloudflare:workers";
 import { getDb } from "../../../db";
 import { bankRateObservations } from "../../../db/schema";
 
-type Quote = { term: string; months: number; apy: number };
+type Quote = { term: string; months: number; apy: number; balance?: string };
 type BankSource = {
   url: string;
   local: boolean;
   browserRequired?: boolean;
   zipInput?: string;
   zipSubmit?: string;
-  adapter?: "chase" | "citizens" | "fifth-third" | "first-american" | "pnc" | "wells-fargo";
+  adapter?: "bank-of-america" | "chase" | "citizens" | "fifth-third" | "first-american" | "pnc" | "wells-fargo";
 };
 
 const banks: Record<string, BankSource> = {
-  "Bank of America": { url: "https://www.bankofamerica.com/deposits/bank-cds/cd-accounts/", local: true },
+  "Bank of America": { url: "https://www.bankofamerica.com/deposits/bank-cds/cd-accounts/", local: true, adapter: "bank-of-america" },
   Chase: { url: "https://www.chase.com/digital/disclosures-and-interest-rates-personal", local: true, adapter: "chase" },
   "Citizens Bank": { url: "https://www.citizensbank.com/savings/cds-certificates-of-deposit/online-certificate-of-deposit.page", local: true, adapter: "citizens" },
   "Fifth Third": { url: "https://openonline.53.com/apps/oc/rates.html?productType=cd", local: true, browserRequired: true, adapter: "fifth-third", zipInput: "#enter-zip", zipSubmit: "form.zip-form button" },
@@ -130,6 +130,10 @@ function firstAmericanRates(text: string): Quote[] {
 
 async function readPublicRatePage(source: BankSource, zipCode: string) {
   const { url } = source;
+  if (source.adapter === "bank-of-america") {
+    const rates = await bankOfAmericaRates(zipCode);
+    return { rates, retrieval: rates.length ? "official-feed" : "unavailable" };
+  }
   if (source.adapter === "first-american") {
     const readerUrl = `https://r.jina.ai/http://${url.replace(/^https?:\/\//, "")}`;
     const readerText = await readPublicText(readerUrl, { headers: { Accept: "text/plain" }, cf: { cacheTtl: 300 } }, 12_000);
@@ -217,14 +221,72 @@ async function chaseRates(zipCode: string): Promise<Quote[]> {
     body: new URLSearchParams({ zipcode: zipCode, type: "CD", language: "en" }).toString(),
   }).catch(() => null);
   if (!response?.ok) return [];
-  const data = await response.json() as { ratesData?: { rates?: Record<string, string[]> } };
+  const data = await response.json() as { ratesData?: { rates?: Record<string, string[]>; cdTermLabels?: string[] } };
   const rates = new Map<string, Quote>();
   for (const [label, values] of Object.entries(data.ratesData?.rates ?? {})) {
     const months = Number(label.match(/^(\d+)-Month$/i)?.[1]);
-    const apy = Number(values?.[0]?.match(/\d+(?:\.\d+)?/)?.[0]);
-    if (Number.isFinite(months) && Number.isFinite(apy)) rates.set(`${months}-${apy}`, { months, term: `${months} ${months === 1 ? "Month" : "Months"}`, apy });
+    const tiers = values.map((value, index) => ({ apy: Number(value.match(/\d+(?:\.\d+)?/)?.[0]), balance: data.ratesData?.cdTermLabels?.[index + 1] ?? "" })).filter((tier) => Number.isFinite(tier.apy));
+    const best = tiers.reduce<(typeof tiers)[number] | null>((current, tier) => !current || tier.apy > current.apy ? tier : current, null);
+    if (Number.isFinite(months) && best) rates.set(`${months}-${best.apy}`, { months, term: `${months} ${months === 1 ? "Month" : "Months"}`, apy: best.apy, balance: best.balance });
   }
   return [...rates.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
+}
+
+const BANK_OF_AMERICA_EPCS = [
+  "FSDPTDZZC1078F3F8A1", "FSDPTDZZC1078F33P71", "FSDPTDZZC1078F33ZA1", "FSDPTDZZC1078F34B11", "FSDPTDZZC1078F34MS1",
+  "FSDPTDZZC1078F34XD1", "FSDPTDZZC1078F355Z1", "FSDPTDZZC1078F35FW1", "FSDPTDZZC1078F35O21", "FSDPTDZZC1078F35Y21", "FSDPTDZZC1078F36A71",
+].join(",");
+
+async function stateForZip(zipCode: string) {
+  const url = new URL("https://www.bankofamerica.com/salesservices/getCountiesByFlowType");
+  url.searchParams.set("zipCode", zipCode);
+  url.searchParams.set("flowType", "consumer");
+  const text = await readPublicText(url.toString(), { headers: { Accept: "application/json", Referer: banks["Bank of America"].url }, cf: { cacheTtl: 86_400 } }, 8_000, 50_000);
+  try {
+    const payload = JSON.parse(text) as { state?: unknown }[];
+    const state = payload[0]?.state;
+    return typeof state === "string" && /^[A-Z]{2}$/.test(state) ? state : "";
+  } catch { return ""; }
+}
+
+function parseBankOfAmericaRates(text: string): Quote[] {
+  try {
+    const payload = JSON.parse(text) as Record<string, { displayName?: unknown; cdProductAttributes?: { standardApy?: unknown; minimumOpeningBalance?: unknown; minimumTermMonths?: unknown; maxTermMonths?: unknown } }>;
+    const rates = new Map<string, Quote>();
+    for (const product of Object.values(payload)) {
+      const attributes = product.cdProductAttributes;
+      const min = Number(attributes?.minimumTermMonths);
+      const max = Number(attributes?.maxTermMonths);
+      const apy = rateFromUnknown(attributes?.standardApy);
+      if (apy === null || !Number.isFinite(max) || max < 1) continue;
+      const term = Number.isFinite(min) && min > 0 && min !== max ? `${min}–${max} Months` : `${max} ${max === 1 ? "Month" : "Months"}`;
+      const opening = typeof attributes?.minimumOpeningBalance === "string" ? attributes.minimumOpeningBalance : "";
+      rates.set(`${min}-${max}-${apy}`, { term, months: min > 0 ? min : max, apy, balance: opening ? `Min. ${opening}` : undefined });
+    }
+    return [...rates.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
+  } catch { return []; }
+}
+
+async function bankOfAmericaRates(zipCode: string): Promise<Quote[]> {
+  const state = await stateForZip(zipCode);
+  if (!state || !browserBinding) return [];
+  const url = new URL("https://www.bankofamerica.com/salesservices/getProductDetailsForEpcs");
+  url.searchParams.set("epcCode", BANK_OF_AMERICA_EPCS);
+  url.searchParams.set("state", state);
+  let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
+  try {
+    const limits = await puppeteer.limits(browserBinding);
+    if (limits.allowedBrowserAcquisitions < 1) return [];
+    browser = await puppeteer.launch(browserBinding);
+    const page = await browser.newPage();
+    await page.goto(banks["Bank of America"].url, { waitUntil: "domcontentloaded", timeout: 15_000 });
+    const text = await page.evaluate(async (endpoint) => {
+      const response = await fetch(endpoint, { headers: { Accept: "application/json" } });
+      return response.ok ? response.text() : "";
+    }, url.toString());
+    return parseBankOfAmericaRates(text);
+  } catch { return []; }
+  finally { await browser?.close().catch(() => undefined); }
 }
 
 function citizensQuote(label: string, apy: unknown): Quote | null {
