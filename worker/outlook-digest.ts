@@ -6,7 +6,7 @@ const TOKEN_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/
 const DEVICE_CODE_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
 const TREASURY_SOURCE = "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml";
 
-const BANKS = ["Bank of America", "Chase", "Citizens Bank", "Fifth Third", "First American Bank", "Morgan Stanley", "Old National Bank", "PNC", "Synchrony Bank", "TD Bank", "Truist", "U.S. Bank", "Wells Fargo"] as const;
+const BANKS = ["Bank of America", "Chase", "Citizens Bank", "Fifth Third", "First American Bank", "Morgan Stanley", "PNC", "Synchrony Bank", "TD Bank", "Truist", "U.S. Bank", "Wells Fargo"] as const;
 const TREASURY_TERMS = ["3 Mo", "6 Mo", "1 Yr", "2 Yr", "5 Yr", "10 Yr", "30 Yr"] as const;
 const TREASURY_FIELDS = { "3 Mo": "BC_3MONTH", "6 Mo": "BC_6MONTH", "1 Yr": "BC_1YEAR", "2 Yr": "BC_2YEAR", "5 Yr": "BC_5YEAR", "10 Yr": "BC_10YEAR", "30 Yr": "BC_30YEAR" } as const;
 
