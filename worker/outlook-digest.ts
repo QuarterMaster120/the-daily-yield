@@ -15,6 +15,7 @@ type TreasuryTerm = (typeof TREASURY_TERMS)[number];
 
 export interface OutlookDigestEnv {
   DB: D1Database;
+  QUOTE_SERVICE?: Fetcher;
   OUTLOOK_TOKEN_KEY?: string;
   OUTLOOK_SETUP_TOKEN?: string;
   OUTLOOK_REFRESH_TOKEN?: string;
@@ -194,11 +195,12 @@ async function treasurySnapshot(now: Date): Promise<TreasurySnapshot> {
   return latest;
 }
 
-async function bankQuote(bank: BankName, zipCode: string): Promise<BankQuote> {
+async function bankQuote(env: OutlookDigestEnv, bank: BankName, zipCode: string): Promise<BankQuote> {
   const url = new URL("/api/quote", SITE_ORIGIN);
   url.searchParams.set("bank", bank); url.searchParams.set("zipCode", zipCode);
   try {
-    const response = await fetch(url, { headers: { Accept: "application/json", "User-Agent": "YieldAtlas-DailyDigest/1.0" } });
+    const request = new Request(url, { headers: { Accept: "application/json", "User-Agent": "YieldAtlas-DailyDigest/1.0" } });
+    const response = env.QUOTE_SERVICE ? await env.QUOTE_SERVICE.fetch(request) : await fetch(request);
     const payload = await readJson<{ source?: unknown; rates?: unknown; error?: unknown }>(response);
     const source = typeof payload.source === "string" ? payload.source : "";
     const rates = Array.isArray(payload.rates) ? payload.rates.flatMap((item) => {
@@ -207,7 +209,8 @@ async function bankQuote(bank: BankName, zipCode: string): Promise<BankQuote> {
       return typeof quote.term === "string" && typeof quote.months === "number" && typeof quote.apy === "number" && Number.isFinite(quote.apy) ? [{ term: quote.term, months: quote.months, apy: quote.apy }] : [];
     }) : [];
     return rates.length ? { source, rates } : { source, rates: [], error: typeof payload.error === "string" ? payload.error : "No current quote was returned." };
-  } catch {
+  } catch (error) {
+    console.error(JSON.stringify({ event: "daily_digest_quote_request_failed", bank, error: error instanceof Error ? error.message : String(error) }));
     return { source: "", rates: [], error: "The current public quote is unavailable." };
   }
 }
@@ -287,7 +290,7 @@ async function digestForSubscriber(env: OutlookDigestEnv, subscriber: Subscriber
   const quotes = new Map<BankName, BankQuote>();
   for (const bank of subscriber.banks) {
     const cacheKey = `${bank}:${subscriber.zipCode}`;
-    const pending = quoteCache.get(cacheKey) ?? bankQuote(bank, subscriber.zipCode);
+    const pending = quoteCache.get(cacheKey) ?? bankQuote(env, bank, subscriber.zipCode);
     quoteCache.set(cacheKey, pending);
     quotes.set(bank, await pending);
   }
@@ -333,6 +336,19 @@ export function runScheduledDigest(env: OutlookDigestEnv, scheduledTime: number)
 
 export function runManualDigest(env: OutlookDigestEnv) {
   return deliverDigest(env, new Date(), true, true);
+}
+
+async function quoteHealth(env: OutlookDigestEnv) {
+  const recipients = await subscribers(env);
+  const cache = new Map<string, Promise<BankQuote>>();
+  const checks: { bank: BankName; rateCount: number }[] = [];
+  for (const recipient of recipients) for (const bank of recipient.banks) {
+    const key = `${bank}:${recipient.zipCode}`;
+    const quote = cache.get(key) ?? bankQuote(env, bank, recipient.zipCode);
+    cache.set(key, quote);
+    checks.push({ bank, rateCount: (await quote).rates.length });
+  }
+  return { subscribers: recipients.length, checks };
 }
 
 async function startDeviceAuthorization(env: OutlookDigestEnv) {
@@ -395,6 +411,10 @@ export async function handleOutlookInternal(request: Request, env: OutlookDigest
   if (url.pathname === "/internal/outlook/send-today") {
     try { return Response.json(await runManualDigest(env), { headers: { "Cache-Control": "no-store" } }); }
     catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to send today's digest." }, { status: 503, headers: { "Cache-Control": "no-store" } }); }
+  }
+  if (url.pathname === "/internal/outlook/quote-health") {
+    try { return Response.json(await quoteHealth(env), { headers: { "Cache-Control": "no-store" } }); }
+    catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to check current quote health." }, { status: 503, headers: { "Cache-Control": "no-store" } }); }
   }
   return Response.json({ error: "Not found" }, { status: 404 });
 }

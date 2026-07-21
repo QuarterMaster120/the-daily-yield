@@ -6,6 +6,12 @@
   "browser": {
     "binding": "BROWSER"
   },
+  "services": [
+    {
+      "binding": "QUOTE_SERVICE",
+      "service": "yield-atlas"
+    }
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
