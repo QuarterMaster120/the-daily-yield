@@ -225,7 +225,7 @@ function emailBody(subscriber: Subscriber, treasury: TreasurySnapshot, quotes: M
     const quote = quotes.get(bank) ?? { source: "", rates: [], error: "No current quote was returned." };
     const source = quote.source ? `<a class="bank-source" href="${escapeHtml(quote.source)}">Source</a>` : "";
     const rateHtml = quote.rates.length
-      ? `<div class="rate-list">${quote.rates.map((rate) => `<span class="rate-chip">${escapeHtml(rate.term)}: <strong>${rate.apy.toFixed(2)}%</strong>${rate.balance ? ` <small>${escapeHtml(rate.balance)}</small>` : ""}</span>`).join("")}</div>`
+      ? `<div class="rate-list">${quote.rates.map((rate) => `<span class="rate-chip">${escapeHtml(rate.term)}: <strong>${rate.apy.toFixed(2)}%</strong></span>`).join("")}</div>`
       : `<span class="unavailable">Unavailable — ${escapeHtml(quote.error ?? "No current quote was returned.")}</span>`;
     return `<tr><td class="bank-cell"><strong>${escapeHtml(bank)}</strong>${source}</td><td class="rate-cell">${rateHtml}</td></tr>`;
   }).join("");
@@ -233,7 +233,7 @@ function emailBody(subscriber: Subscriber, treasury: TreasurySnapshot, quotes: M
   const subject = `Yield Atlas rate note — ${displayEasternDate(now)}`;
   const html = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#172033;max-width:760px;margin:auto;padding:0 16px"><h1 style="font-size:22px">Yield Atlas rate note</h1><p>Prepared ${escapeHtml(displayEasternDate(now))} for ZIP <strong>${escapeHtml(subscriber.zipCode)}</strong>.</p>${treasuryHtml}${banksHtml}<p style="color:#5f6b7a;font-size:12px">Automated weekday update. Confirm current terms and disclosures with the issuing bank before acting.</p><style>table{border-collapse:collapse;width:100%}.rates-table{table-layout:fixed}th,td{text-align:left;border-bottom:1px solid #d9e0e8;padding:12px 8px;vertical-align:top}.bank-cell{width:126px}.bank-source{display:block;margin-top:6px;font-size:12px}.rate-list{line-height:1.5}.rate-chip{display:inline-block;margin:0 8px 6px 0;white-space:nowrap}.rate-chip small{margin-left:3px}.unavailable{line-height:1.45}h2{font-size:18px;margin:26px 0 8px}small{font-weight:normal;color:#5f6b7a}@media only screen and (max-width:600px){.rates-table,.rates-table tbody,.rates-table tr,.rates-table td{display:block;width:100%!important;box-sizing:border-box}.rates-table thead{display:none}.rates-table tr{border-bottom:1px solid #d9e0e8;padding:12px 0}.rates-table td{border:0;padding:0}.rates-table .bank-cell{font-size:17px;margin-bottom:9px}.rates-table .bank-source{display:inline;margin-left:8px}.rates-table .rate-chip{display:block;margin:0 0 6px;white-space:normal}}</style></body></html>`;
   const plain = [subject, `Prepared for ZIP ${subscriber.zipCode}.`, treasuryText.length ? `Treasury par yields (${treasury.date}): ${treasuryText.join(" · ")}` : "", ...subscriber.banks.map((bank) => {
-    const quote = quotes.get(bank); const value = quote?.rates.length ? quote.rates.map((rate) => `${rate.term}: ${rate.apy.toFixed(2)}%${rate.balance ? ` (${rate.balance})` : ""}`).join(" · ") : `Unavailable — ${quote?.error ?? "No current quote was returned."}`;
+    const quote = quotes.get(bank); const value = quote?.rates.length ? quote.rates.map((rate) => `${rate.term}: ${rate.apy.toFixed(2)}%`).join(" · ") : `Unavailable — ${quote?.error ?? "No current quote was returned."}`;
     return `${bank}: ${value}`;
   })].filter(Boolean).join("\n\n");
   return { subject, html, plain };
