@@ -11,16 +11,17 @@ type BankSource = {
   browserRequired?: boolean;
   zipInput?: string;
   zipSubmit?: string;
-  adapter?: "chase" | "citizens" | "fifth-third" | "pnc" | "wells-fargo";
+  adapter?: "chase" | "citizens" | "fifth-third" | "first-american" | "old-national" | "pnc" | "wells-fargo";
 };
 
 const banks: Record<string, BankSource> = {
   "Bank of America": { url: "https://www.bankofamerica.com/deposits/bank-cds/cd-accounts/", local: true },
-  "Capital One": { url: "https://www.capitalone.com/bank/cds/online-cds/", local: false },
   Chase: { url: "https://www.chase.com/digital/disclosures-and-interest-rates-personal", local: true, adapter: "chase" },
   "Citizens Bank": { url: "https://www.citizensbank.com/savings/cds-certificates-of-deposit/online-certificate-of-deposit.page", local: true, adapter: "citizens" },
   "Fifth Third": { url: "https://openonline.53.com/apps/oc/rates.html?productType=cd", local: true, browserRequired: true, adapter: "fifth-third", zipInput: "#enter-zip", zipSubmit: "form.zip-form button" },
+  "First American Bank": { url: "https://www.firstambank.com/Personal/Explore/Rates/Deposit-Rates", local: true, adapter: "first-american" },
   "Morgan Stanley": { url: "https://www.morganstanley.com/what-we-do/wealth-management/cd-savings", local: true },
+  "Old National Bank": { url: "https://www.oldnational.com/personal/savings/certificates-of-deposit/", local: true, adapter: "old-national" },
   PNC: { url: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html", local: true, browserRequired: true, adapter: "pnc", zipInput: "#zip-overlay #zipCodeUpdate, #zip-overlay-01 #zipCode", zipSubmit: "#form-button-1275034976, #form-button-1195175473" },
   "Synchrony Bank": { url: "https://www.synchronybank.com/banking/cd-rates/", local: false },
   "TD Bank": { url: "https://www.td.com/us/en/personal-banking/certificates-of-deposit", local: true },
@@ -117,8 +118,40 @@ function parseAdjacentRateTerms(text: string): Quote[] {
   return [...result.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
 }
 
+function firstAmericanRates(text: string): Quote[] {
+  const cdSection = text.match(/Certificates of Deposit[\s\S]*?(?:Get Started|$)/i)?.[0] ?? text;
+  const rates = new Map<string, Quote>();
+  for (const match of cdSection.matchAll(/\|\s*(\d{1,2}(?:\.5)?\s*(?:month|mo|year|yr)s?)\s*\|\s*\d+(?:\.\d+)?%\s*\|\s*(\d+(?:\.\d+)?)%/gi)) {
+    const parsed = term(match[1]);
+    const apy = Number(match[2]);
+    if (parsed && Number.isFinite(apy)) rates.set(`${parsed.months}-${apy}`, { ...parsed, apy });
+  }
+  return [...rates.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
+}
+
+function oldNationalRates(text: string): Quote[] {
+  const rates = new Map<string, Quote>();
+  for (const match of text.matchAll(/Earn\s+(\d+(?:\.\d+)?)%\s*APY[\s\S]{0,160}?(\d{1,2})[\s\-‑]+Month\s+CD/gi)) {
+    const months = Number(match[2]);
+    const apy = Number(match[1]);
+    if (Number.isFinite(months) && Number.isFinite(apy)) rates.set(`${months}-${apy}`, { months, term: `${months} Months`, apy });
+  }
+  return [...rates.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
+}
+
 async function readPublicRatePage(source: BankSource, zipCode: string) {
   const { url } = source;
+  if (source.adapter === "first-american") {
+    const readerUrl = `https://r.jina.ai/http://${url.replace(/^https?:\/\//, "")}`;
+    const readerText = await readPublicText(readerUrl, { headers: { Accept: "text/plain" }, cf: { cacheTtl: 300 } }, 12_000);
+    const rates = firstAmericanRates(readerText);
+    return { rates, retrieval: rates.length ? "official-page" : "unavailable" };
+  }
+  if (source.adapter === "old-national") {
+    const text = await readPublicText(url, { headers: browserHeaders, cf: { cacheTtl: 300 } }, 12_000);
+    const rates = oldNationalRates(text);
+    return { rates, retrieval: rates.length ? "official-page" : "unavailable" };
+  }
   if (source.adapter === "chase") {
     const rates = await chaseRates(zipCode);
     return { rates, retrieval: rates.length ? "official-feed" : "unavailable" };
@@ -151,7 +184,7 @@ async function readPublicRatePage(source: BankSource, zipCode: string) {
   }
 
   // Do not substitute a public-reader response for a market-specific rate.
-  if (source.local) return { rates: [], retrieval: "unavailable" };
+  if (source.local && source.adapter !== "first-american") return { rates: [], retrieval: "unavailable" };
 
   let readerText = "";
   {
