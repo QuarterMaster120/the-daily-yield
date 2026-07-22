@@ -1,7 +1,7 @@
 :root { --ink:#19201e; --muted:#64716d; --paper:#f5f3ee; --card:#fffdf9; --line:#d9ded8; --green:#126b4a; --lime:#dff36a; --orange:#de6f3d; --mint:#c9eee0; --sky:#cfe4f6; --apricot:#ffd6bd; --violet:#dcd6fa; --gold:#f4df86; }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
-body { min-height:100vh; margin:0; background-color:var(--paper); background-image:linear-gradient(180deg,rgba(245,243,238,.86) 0%,rgba(245,243,238,.8) 52%,rgba(245,243,238,.92) 100%),url("/yield-atlas-market-bg.webp"); background-position:center top; background-size:cover; background-attachment:fixed; color:var(--ink); font-family:var(--font-sans), Arial, sans-serif; }
+body { min-height:100vh; margin:0; background-color:var(--paper); background-image:linear-gradient(180deg,rgba(245,243,238,.86) 0%,rgba(245,243,238,.8) 52%,rgba(245,243,238,.92) 100%),url("/the-daily-yield-market-bg.webp"); background-position:center top; background-size:cover; background-attachment:fixed; color:var(--ink); font-family:var(--font-sans), Arial, sans-serif; }
 button, input, select { font:inherit; }
 button { cursor:pointer; }
 .shell { max-width:1180px; min-height:100vh; margin:0 auto; padding:0 28px; }

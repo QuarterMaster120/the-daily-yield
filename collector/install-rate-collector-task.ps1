@@ -1,4 +1,4 @@
-param([string]$TaskName = "Yield Atlas - Rate Collector")
+param([string]$TaskName = "The Daily Yield - Rate Collector")
 
 $required = "RATE_COLLECTION_READ_TOKEN", "RATE_COLLECTION_WRITE_TOKEN"
 $missing = $required | Where-Object { -not [Environment]::GetEnvironmentVariable($_, "User") }
@@ -14,5 +14,5 @@ $command = "Set-Location -LiteralPath '$PSScriptRoot'; & '$node' '$collector' *>
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command `"$command`""
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At 4:45AM
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 10) -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Description "Collects Citizens Bank, Fifth Third, and PNC public ZIP-specific CD rates for Yield Atlas before the 5 AM ET email cycle." -Force | Out-Null
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Description "Collects Citizens Bank, Fifth Third, and PNC public ZIP-specific CD rates for The Daily Yield before the 5 AM ET email cycle." -Force | Out-Null
 Write-Output "Installed '$TaskName'. It runs Monday through Friday at 4:45 AM local time and writes diagnostics to $log."

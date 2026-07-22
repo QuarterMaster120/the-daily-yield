@@ -9,13 +9,13 @@ const serif = Playfair_Display({ variable: "--font-serif", subsets: ["latin"] })
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "https";
-  const host = requestHeaders.get("host") ?? "yield-atlas.local";
+  const host = requestHeaders.get("host") ?? "the-daily-yield.local";
   return {
     metadataBase: new URL(`${protocol}://${host}`),
-    title: "Yield Atlas | Daily CD & Treasury rates",
+    title: "The Daily Yield | Daily CD & Treasury rates",
     description: "Track closing CD and Treasury rates. Get the daily 5 AM email.",
-  openGraph: { title: "Yield Atlas", description: "Daily CD + Treasury closes", images: ["/og-yield-atlas.png"] },
-  twitter: { card: "summary_large_image", title: "Yield Atlas", images: ["/og-yield-atlas.png"] },
+  openGraph: { title: "The Daily Yield", description: "Daily CD + Treasury closes", images: ["/og-the-daily-yield.png"] },
+  twitter: { card: "summary_large_image", title: "The Daily Yield", images: ["/og-the-daily-yield.png"] },
   };
 }
 
