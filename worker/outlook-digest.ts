@@ -96,6 +96,29 @@ async function tokenKey(env: OutlookDigestEnv) {
   return crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt", "decrypt"]);
 }
 
+async function unsubscribeKey(env: OutlookDigestEnv) {
+  if (!env.OUTLOOK_TOKEN_KEY) throw new Error("The Outlook token key is not configured.");
+  const key = fromBase64Url(env.OUTLOOK_TOKEN_KEY);
+  if (key.byteLength !== 32) throw new Error("The Outlook token key is invalid.");
+  return crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+}
+
+async function unsubscribeToken(env: OutlookDigestEnv, email: string) {
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", await unsubscribeKey(env), textEncoder.encode(`yield-atlas-unsubscribe:${email}`)));
+  return base64Url(signature);
+}
+
+async function validUnsubscribeToken(env: OutlookDigestEnv, email: string, supplied: string) {
+  try {
+    const expected = await unsubscribeToken(env, email);
+    const [expectedHash, suppliedHash] = await Promise.all([
+      crypto.subtle.digest("SHA-256", textEncoder.encode(expected)),
+      crypto.subtle.digest("SHA-256", textEncoder.encode(supplied)),
+    ]);
+    return equalHash(new Uint8Array(expectedHash), new Uint8Array(suppliedHash));
+  } catch { return false; }
+}
+
 async function encryptToken(env: OutlookDigestEnv, value: string) {
   const iv = new Uint8Array(12); crypto.getRandomValues(iv);
   const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await tokenKey(env), textEncoder.encode(value)));
@@ -215,7 +238,7 @@ async function bankQuote(env: OutlookDigestEnv, bank: BankName, zipCode: string)
   }
 }
 
-function emailBody(subscriber: Subscriber, treasury: TreasurySnapshot, quotes: Map<BankName, BankQuote>, now: Date) {
+async function emailBody(env: OutlookDigestEnv, subscriber: Subscriber, treasury: TreasurySnapshot, quotes: Map<BankName, BankQuote>, now: Date) {
   const treasuryText = subscriber.treasuries.flatMap((term) => {
     const rate = treasury.yields[term];
     return rate === undefined ? [] : [`${term}: ${rate.toFixed(2)}%`];
@@ -231,12 +254,15 @@ function emailBody(subscriber: Subscriber, treasury: TreasurySnapshot, quotes: M
   }).join("");
   const banksHtml = bankRows ? `<section><h2>Bank CD offers</h2><table class="rates-table" role="presentation"><thead><tr><th>Bank</th><th>Term / APY</th></tr></thead><tbody>${bankRows}</tbody></table></section>` : "";
   const subject = `Yield Atlas rate note — ${displayEasternDate(now)}`;
-  const html = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#172033;max-width:760px;margin:auto;padding:0 16px"><h1 style="font-size:22px">Yield Atlas rate note</h1><p>Prepared ${escapeHtml(displayEasternDate(now))} for ZIP <strong>${escapeHtml(subscriber.zipCode)}</strong>.</p>${treasuryHtml}${banksHtml}<p style="color:#5f6b7a;font-size:12px">Automated weekday update. Confirm current terms and disclosures with the issuing bank before acting.</p><style>table{border-collapse:collapse;width:100%}.rates-table{table-layout:fixed}th,td{text-align:left;border-bottom:1px solid #d9e0e8;padding:12px 8px;vertical-align:top}.bank-cell{width:126px}.bank-source{display:block;margin-top:6px;font-size:12px}.rate-list{line-height:1.5}.rate-chip{display:inline-block;margin:0 8px 6px 0;white-space:nowrap}.rate-chip small{margin-left:3px}.unavailable{line-height:1.45}h2{font-size:18px;margin:26px 0 8px}small{font-weight:normal;color:#5f6b7a}@media only screen and (max-width:600px){.rates-table,.rates-table tbody,.rates-table tr,.rates-table td{display:block;width:100%!important;box-sizing:border-box}.rates-table thead{display:none}.rates-table tr{border-bottom:1px solid #d9e0e8;padding:12px 0}.rates-table td{border:0;padding:0}.rates-table .bank-cell{font-size:17px;margin-bottom:9px}.rates-table .bank-source{display:inline;margin-left:8px}.rates-table .rate-chip{display:block;margin:0 0 6px;white-space:normal}}</style></body></html>`;
+  const unsubscribe = new URL("/unsubscribe", SITE_ORIGIN);
+  unsubscribe.searchParams.set("email", subscriber.email);
+  unsubscribe.searchParams.set("token", await unsubscribeToken(env, subscriber.email));
+  const html = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#172033;max-width:760px;margin:auto;padding:0 16px"><h1 style="font-size:22px">Yield Atlas rate note</h1><p>Prepared ${escapeHtml(displayEasternDate(now))} for ZIP <strong>${escapeHtml(subscriber.zipCode)}</strong>.</p>${treasuryHtml}${banksHtml}<p style="color:#5f6b7a;font-size:12px">Automated weekday update. Confirm current terms and disclosures with the issuing bank before acting.</p><p class="unsubscribe"><a class="unsubscribe-button" href="${escapeHtml(unsubscribe.toString())}">Unsubscribe</a></p><style>table{border-collapse:collapse;width:100%}.rates-table{table-layout:fixed}th,td{text-align:left;border-bottom:1px solid #d9e0e8;padding:12px 8px;vertical-align:top}.bank-cell{width:126px}.bank-source{display:block;margin-top:6px;font-size:12px}.rate-list{line-height:1.5}.rate-chip{display:inline-block;margin:0 8px 6px 0;white-space:nowrap}.rate-chip small{margin-left:3px}.unavailable{line-height:1.45}.unsubscribe{margin-top:24px}.unsubscribe-button{display:inline-block;border:1px solid #aeb8c4;border-radius:4px;padding:8px 12px;color:#334155;font-size:12px;text-decoration:none}h2{font-size:18px;margin:26px 0 8px}small{font-weight:normal;color:#5f6b7a}@media only screen and (max-width:600px){.rates-table,.rates-table tbody,.rates-table tr,.rates-table td{display:block;width:100%!important;box-sizing:border-box}.rates-table thead{display:none}.rates-table tr{border-bottom:1px solid #d9e0e8;padding:12px 0}.rates-table td{border:0;padding:0}.rates-table .bank-cell{font-size:17px;margin-bottom:9px}.rates-table .bank-source{display:inline;margin-left:8px}.rates-table .rate-chip{display:block;margin:0 0 6px;white-space:normal}}</style></body></html>`;
   const plain = [subject, `Prepared for ZIP ${subscriber.zipCode}.`, treasuryText.length ? `Treasury par yields (${treasury.date}): ${treasuryText.join(" · ")}` : "", ...subscriber.banks.map((bank) => {
     const quote = quotes.get(bank); const value = quote?.rates.length ? quote.rates.map((rate) => `${rate.term}: ${rate.apy.toFixed(2)}%`).join(" · ") : `Unavailable — ${quote?.error ?? "No current quote was returned."}`;
     return `${bank}: ${value}`;
   })].filter(Boolean).join("\n\n");
-  return { subject, html, plain };
+  return { subject, html, plain: `${plain}\n\nUnsubscribe: ${unsubscribe.toString()}` };
 }
 
 async function senderConnection(env: OutlookDigestEnv) {
@@ -296,7 +322,7 @@ async function digestForSubscriber(env: OutlookDigestEnv, subscriber: Subscriber
     quoteCache.set(cacheKey, pending);
     quotes.set(bank, await pending);
   }
-  return emailBody(subscriber, treasury, quotes, new Date());
+  return emailBody(env, subscriber, treasury, quotes, new Date());
 }
 
 async function sendToSubscriber(env: OutlookDigestEnv, subscriber: Subscriber, access: string, treasury: TreasurySnapshot, quoteCache: Map<string, Promise<BankQuote>>, useIdempotency: boolean) {
@@ -382,8 +408,34 @@ async function completeDeviceAuthorization(env: OutlookDigestEnv, connectionId: 
   return { connected: true, pending: false };
 }
 
+function unsubscribePage(title: string, content: string) {
+  return new Response(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title></head><body style="margin:0;background:#f5f7f8;font-family:Arial,sans-serif;color:#172033"><main style="max-width:520px;margin:64px auto;padding:32px;background:#fff;border:1px solid #d9e0e8;border-radius:12px"><p style="margin:0 0 12px;color:#64716d;font-size:12px;letter-spacing:.08em">YIELD ATLAS</p><h1 style="margin:0 0 16px;font-size:26px">${escapeHtml(title)}</h1>${content}</main></body></html>`, { headers: { "Content-Type": "text/html; charset=UTF-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
+}
+
+async function handleUnsubscribe(request: Request, env: OutlookDigestEnv): Promise<Response> {
+  const url = new URL(request.url);
+  let email = url.searchParams.get("email")?.trim().toLowerCase() ?? "";
+  let token = url.searchParams.get("token") ?? "";
+  if (request.method === "POST") {
+    const form = await request.formData().catch(() => null);
+    email = typeof form?.get("email") === "string" ? form.get("email")!.trim().toLowerCase() : "";
+    token = typeof form?.get("token") === "string" ? form.get("token")! : "";
+  }
+  if (!validEmail(email) || !token || !await validUnsubscribeToken(env, email, token)) {
+    return unsubscribePage("This link is invalid", "<p>This unsubscribe link is no longer valid. Return to a recent Yield Atlas email and use its unsubscribe button.</p>");
+  }
+  if (request.method === "GET") {
+    const form = `<p>You are about to stop Yield Atlas rate-note emails for <strong>${escapeHtml(email)}</strong>.</p><form method="post"><input type="hidden" name="email" value="${escapeHtml(email)}"><input type="hidden" name="token" value="${escapeHtml(token)}"><button type="submit" style="border:0;border-radius:5px;background:#172033;color:#fff;padding:11px 16px;font:inherit;cursor:pointer">Confirm unsubscribe</button></form>`;
+    return unsubscribePage("Unsubscribe from Yield Atlas", form);
+  }
+  if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: { Allow: "GET, POST" } });
+  await env.DB.prepare("DELETE FROM subscribers WHERE email = ?").bind(email).run();
+  return unsubscribePage("You’re unsubscribed", "<p>You will no longer receive Yield Atlas rate-note emails at this address.</p>");
+}
+
 export async function handleOutlookInternal(request: Request, env: OutlookDigestEnv): Promise<Response | null> {
   const url = new URL(request.url);
+  if (url.pathname === "/unsubscribe") return handleUnsubscribe(request, env);
   if (!url.pathname.startsWith("/internal/outlook/")) return null;
   if (request.method !== "POST" || !await matchesSetupToken(request, env)) return Response.json({ error: "Not found" }, { status: 404 });
   if (url.pathname === "/internal/outlook/start") {
