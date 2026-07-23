@@ -5,6 +5,7 @@ import { hasCollectorToken } from "../collector-auth";
 const sources = {
   "Citizens Bank": "https://www.citizensbank.com/assets/CB_resources/json/rates/ODS.json",
   "Fifth Third": "https://openonline.53.com/apps/oc/rates.html?productType=cd",
+  "First American Bank": "https://www.firstambank.com/Personal/Explore/Rates/Deposit-Rates",
   PNC: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html",
 } as const;
 type IncomingRate = { term?: unknown; months?: unknown; apy?: unknown };

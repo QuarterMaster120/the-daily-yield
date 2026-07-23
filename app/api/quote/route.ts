@@ -335,7 +335,7 @@ function fifthThirdRates(text: string): Quote[] {
 }
 
 async function savedDesktopRates(bank: string, zipCode: string): Promise<{ rates: Quote[]; retrievedAt?: string }> {
-  if (bank !== "Citizens Bank" && bank !== "Fifth Third" && bank !== "PNC") return { rates: [] };
+  if (bank !== "Citizens Bank" && bank !== "Fifth Third" && bank !== "First American Bank" && bank !== "PNC") return { rates: [] };
   const rows = await getDb().select({ term: bankRateObservations.term, termMonths: bankRateObservations.termMonths, apy: bankRateObservations.apy, observedAt: bankRateObservations.observedAt }).from(bankRateObservations).where(and(eq(bankRateObservations.bank, bank), eq(bankRateObservations.zipCode, zipCode))).orderBy(desc(bankRateObservations.observedAt)).limit(12);
   const latest = rows[0]?.observedAt;
   if (!latest) return { rates: [] };
@@ -503,7 +503,7 @@ export async function GET(request: Request) {
   try {
     // Citizens is collected locally before the email cycle because its upstream
     // public feed rejects Cloudflare Worker requests. Prefer that fresh ZIP data.
-    const earlySaved = bank === "Citizens Bank" ? await savedDesktopRates(bank, zipCode).catch(() => ({ rates: [] })) : { rates: [] };
+    const earlySaved = bank === "Citizens Bank" || bank === "First American Bank" ? await savedDesktopRates(bank, zipCode).catch(() => ({ rates: [] })) : { rates: [] };
     const quote = earlySaved.rates.length ? { rates: [], retrieval: "unavailable" } : bank === "Synchrony Bank" ? { rates: await synchronyRates(), retrieval: "official-feed" } : await readPublicRatePage(source, zipCode);
     const saved = earlySaved.rates.length ? earlySaved : !quote.rates.length ? await savedDesktopRates(bank, zipCode).catch(() => ({ rates: [] })) : { rates: [] };
     const rates = quote.rates.length ? quote.rates : saved.rates;

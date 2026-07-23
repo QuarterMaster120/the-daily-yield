@@ -14,5 +14,5 @@ $command = "Set-Location -LiteralPath '$PSScriptRoot'; & '$node' '$collector' *>
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command `"$command`""
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At 4:45AM
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 10) -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Description "Collects Citizens Bank, Fifth Third, and PNC public ZIP-specific CD rates for The Daily Yield before the 5 AM ET email cycle." -Force | Out-Null
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Description "Collects Citizens Bank, Fifth Third, First American, and PNC public CD rates for The Daily Yield before the 5 AM ET email cycle." -Force | Out-Null
 Write-Output "Installed '$TaskName'. It runs Monday through Friday at 4:45 AM local time and writes diagnostics to $log."
