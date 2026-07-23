@@ -5,7 +5,7 @@ import { hasCollectorToken } from "../collector-auth";
 
 // Desktop collectors are deliberately opt-in by source. This prevents a local
 // browser from retrieving a bank that has a working, server-side official feed.
-const desktopBanks = new Set(["Citizens Bank", "Fifth Third", "First American Bank", "PNC"]);
+const desktopBanks = new Set(["Citizens Bank", "Fifth Third", "PNC"]);
 
 export async function GET(request: Request) {
   if (!await hasCollectorToken(request, "RATE_COLLECTION_READ_TOKEN")) return Response.json({ error: "Unauthorized" }, { status: 401, headers: { "Cache-Control": "no-store" } });

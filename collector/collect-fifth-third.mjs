@@ -4,7 +4,6 @@ import { existsSync } from "node:fs";
 const sourceUrls = {
   "Citizens Bank": "https://www.citizensbank.com/assets/CB_resources/json/rates/ODS.json",
   "Fifth Third": "https://openonline.53.com/apps/oc/rates.html?productType=cd",
-  "First American Bank": "https://www.firstambank.com/Personal/Explore/Rates/Deposit-Rates",
   PNC: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html",
 };
 const defaultEndpoint = "https://yield-atlas.startcodex.workers.dev";
@@ -87,24 +86,6 @@ async function citizensRates(zipCode) {
   return [...rates.values()].sort((a, b) => a.months - b.months).slice(0, 12);
 }
 
-async function firstAmericanRates() {
-  const source = sourceUrls["First American Bank"].replace(/^https?:\/\//, "");
-  const response = await fetch(`https://r.jina.ai/http://${source}`, { headers: { Accept: "text/plain" }, signal: AbortSignal.timeout(30_000) });
-  if (!response.ok) throw new Error(`First American returned ${response.status} through its public reader.`);
-  const text = await response.text();
-  const section = text.match(/Certificates of Deposit[\s\S]*?(?:Get Started|$)/i)?.[0] ?? "";
-  const rates = new Map();
-  for (const match of section.matchAll(/\|\s*(\d{1,2}(?:\.5)?\s*(?:month|mo|year|yr)s?)\s*\|\s*\d+(?:\.\d+)?%\s*\|\s*(\d+(?:\.\d+)?)%/gi)) {
-    const term = match[1].match(/(\d{1,2}(?:\.5)?)\s*(month|mo|year|yr)/i);
-    const number = Number(term?.[1]); const months = /year|yr/i.test(term?.[2] ?? "") ? Math.round(number * 12) : Math.round(number);
-    const apy = Number(match[2]);
-    if (!Number.isInteger(months) || months < 1 || months > 120 || !Number.isFinite(apy) || apy < 0 || apy > 20) continue;
-    rates.set(months, { months, term: `${number} ${months === 1 ? "Month" : /year|yr/i.test(term?.[2] ?? "") ? "Years" : "Months"}`, apy });
-  }
-  if (!rates.size) throw new Error("First American returned no public CD APYs; no rates were saved.");
-  return [...rates.values()].sort((a, b) => a.months - b.months).slice(0, 12);
-}
-
 function pncRows(rows) {
   const rates = new Map();
   for (const row of rows) {
@@ -151,7 +132,7 @@ async function main() {
     for (const job of jobs) {
       const page = await context.newPage();
       try {
-        const rates = job.bank === "Citizens Bank" ? await citizensRates(job.zipCode) : job.bank === "Fifth Third" ? await fifthThirdRates(page, job.zipCode) : job.bank === "First American Bank" ? await firstAmericanRates() : await pncRates(page, job.zipCode);
+        const rates = job.bank === "Citizens Bank" ? await citizensRates(job.zipCode) : job.bank === "Fifth Third" ? await fifthThirdRates(page, job.zipCode) : await pncRates(page, job.zipCode);
         observations.push({ bank: job.bank, zipCode: job.zipCode, rates });
         console.log(`Collected ${rates.length} ${job.bank} CD terms for ZIP ${job.zipCode}.`);
       } catch (error) {

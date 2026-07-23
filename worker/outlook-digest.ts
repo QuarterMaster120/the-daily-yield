@@ -5,6 +5,12 @@ const GRAPH_SCOPE = "offline_access User.Read https://graph.microsoft.com/Mail.S
 const TOKEN_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
 const DEVICE_CODE_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
 const TREASURY_SOURCE = "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml";
+const FIRST_AMERICAN_SOURCE = "https://www.firstambank.com/Personal/Explore/Rates/Deposit-Rates";
+const FIRST_AMERICAN_FALLBACK_SOURCES = [
+  FIRST_AMERICAN_SOURCE,
+  "https://www.firstambank.com/Personal/Save/Certificates-of-Deposit",
+  "https://www.firstambank.com/es-US/Personal/Explore/Rates/Deposit-Rates",
+];
 
 const BANKS = ["Bank of America", "Chase", "Citizens Bank", "Fifth Third", "First American Bank", "Morgan Stanley", "PNC", "Synchrony Bank", "TD Bank", "Truist", "U.S. Bank", "Wells Fargo"] as const;
 const TREASURY_TERMS = ["3 Mo", "6 Mo", "1 Yr", "2 Yr", "5 Yr", "10 Yr", "30 Yr"] as const;
@@ -16,6 +22,7 @@ type TreasuryTerm = (typeof TREASURY_TERMS)[number];
 export interface OutlookDigestEnv {
   DB: D1Database;
   QUOTE_SERVICE?: Fetcher;
+  BROWSER?: BrowserWorker;
   OUTLOOK_TOKEN_KEY?: string;
   OUTLOOK_SETUP_TOKEN?: string;
   OUTLOOK_REFRESH_TOKEN?: string;
@@ -184,9 +191,9 @@ async function subscribers(env: OutlookDigestEnv, recipient?: string) {
 }
 
 function easternDate(time: Date) {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", weekday: "short", hour: "2-digit", hourCycle: "h23" }).formatToParts(time);
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(time);
   const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
-  return { date: `${part("year")}-${part("month")}-${part("day")}`, weekday: part("weekday"), hour: part("hour") };
+  return { date: `${part("year")}-${part("month")}-${part("day")}`, weekday: part("weekday"), hour: part("hour"), minute: part("minute") };
 }
 
 function displayEasternDate(time: Date) {
@@ -236,6 +243,76 @@ async function bankQuote(env: OutlookDigestEnv, bank: BankName, zipCode: string)
     console.error(JSON.stringify({ event: "daily_digest_quote_request_failed", bank, error: error instanceof Error ? error.message : String(error) }));
     return { source: "", rates: [], error: "The current public quote is unavailable." };
   }
+}
+
+function firstAmericanRates(text: string): Quote[] {
+  const section = text.match(/(?:Certificates of Deposit|Certificados de dep[oó]sito)[\s\S]*?(?:Get Started|Comience aqu[ií]|$)/i)?.[0] ?? "";
+  const rates = new Map<number, Quote>();
+  for (const match of section.matchAll(/\|\s*(\d{1,2}(?:\.5)?\s*(?:month|mo|year|yr|mes|a[nñ]o)s?)\s*\|\s*\d+(?:\.\d+)?%\s*\|\s*(\d+(?:\.\d+)?)%/gi)) {
+    const term = match[1].match(/(\d{1,2}(?:\.5)?)\s*(month|mo|year|yr|mes|a[nñ]o)/i);
+    const number = Number(term?.[1]); const months = /year|yr|a[nñ]o/i.test(term?.[2] ?? "") ? Math.round(number * 12) : Math.round(number);
+    const apy = Number(match[2]);
+    if (!Number.isInteger(months) || months < 1 || months > 120 || !Number.isFinite(apy) || apy < 0 || apy > 20) continue;
+    rates.set(months, { months, term: `${number} ${months === 1 ? "Month" : /year|yr|a[nñ]o/i.test(term?.[2] ?? "") ? "Years" : "Months"}`, apy });
+  }
+  for (const match of section.matchAll(/(\d{1,2}(?:\.5)?\s*(?:month|mo|year|yr)s?)\s+(?:\d+(?:\.\d+)?%)\s+(\d+(?:\.\d+)?)%/gi)) {
+    const term = match[1].match(/(\d{1,2}(?:\.5)?)\s*(month|mo|year|yr)/i);
+    const number = Number(term?.[1]); const months = /year|yr/i.test(term?.[2] ?? "") ? Math.round(number * 12) : Math.round(number);
+    const apy = Number(match[2]);
+    if (!Number.isInteger(months) || months < 1 || months > 120 || !Number.isFinite(apy) || apy < 0 || apy > 20) continue;
+    rates.set(months, { months, term: `${number} ${months === 1 ? "Month" : /year|yr/i.test(term?.[2] ?? "") ? "Years" : "Months"}`, apy });
+  }
+  return [...rates.values()].sort((left, right) => left.months - right.months).slice(0, 12);
+}
+
+async function browserFirstAmericanRates(env: OutlookDigestEnv) {
+  if (!env.BROWSER) return [];
+  let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
+  try {
+    const limits = await puppeteer.limits(env.BROWSER);
+    if (limits.allowedBrowserAcquisitions < 1) return [];
+    browser = await puppeteer.launch(env.BROWSER);
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1440, height: 1000 });
+    await page.goto(FIRST_AMERICAN_SOURCE, { waitUntil: "domcontentloaded", timeout: 20_000 });
+    await page.waitForTimeout(1_000);
+    return firstAmericanRates(await page.evaluate(() => document.body?.innerText ?? ""));
+  } catch { return []; }
+  finally { await browser?.close().catch(() => undefined); }
+}
+
+async function fetchFirstAmericanRates(env: OutlookDigestEnv) {
+  for (const source of FIRST_AMERICAN_FALLBACK_SOURCES) {
+    const readerUrl = `https://r.jina.ai/http://${source.replace(/^https?:\/\//, "")}`;
+    try {
+      const response = await fetch(readerUrl, { headers: { Accept: "text/plain", "User-Agent": "Mozilla/5.0 (compatible; TheDailyYield/1.0)" }, signal: AbortSignal.timeout(20_000), cf: { cacheTtl: 300 } });
+      if (response.ok) {
+        const rates = firstAmericanRates(await readBoundedText(response, 500_000));
+        if (rates.length) return rates;
+      }
+    } catch { /* Retry the public reader below. */ }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return browserFirstAmericanRates(env);
+}
+
+async function prefetchFirstAmerican(env: OutlookDigestEnv, observedAt: Date) {
+  const recipients = await subscribers(env);
+  const zipCodes = [...new Set(recipients.filter((subscriber) => subscriber.banks.includes("First American Bank")).map((subscriber) => subscriber.zipCode))];
+  if (!zipCodes.length) return { stored: 0, skipped: "no-subscribers" as const };
+  const rates = await fetchFirstAmericanRates(env);
+  if (!rates.length) throw new Error("First American did not return a usable published CD table.");
+  const observedOn = easternDate(observedAt).date;
+  const statements = zipCodes.flatMap((zipCode) => rates.map((rate) => env.DB.prepare("INSERT INTO bank_rate_observations (bank, zip_code, term_months, term, apy, observed_at, observed_on, source, retrieval) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(bank, zip_code, term_months, observed_on) DO UPDATE SET term = excluded.term, apy = excluded.apy, observed_at = excluded.observed_at, source = excluded.source, retrieval = excluded.retrieval")
+    .bind("First American Bank", zipCode, rate.months, rate.term, rate.apy, observedAt.toISOString(), observedOn, FIRST_AMERICAN_SOURCE, "cloudflare-scheduled-page")));
+  await env.DB.batch(statements);
+  return { stored: statements.length, skipped: false as const };
+}
+
+export async function runFirstAmericanPrefetch(env: OutlookDigestEnv, scheduledTime: number) {
+  const scheduledAt = new Date(scheduledTime); const eastern = easternDate(scheduledAt);
+  if (!(eastern.weekday === "Mon" || eastern.weekday === "Tue" || eastern.weekday === "Wed" || eastern.weekday === "Thu" || eastern.weekday === "Fri") || eastern.hour !== "04" || eastern.minute !== "45") return { stored: 0, skipped: "outside-window" as const };
+  return prefetchFirstAmerican(env, scheduledAt);
 }
 
 async function emailBody(env: OutlookDigestEnv, subscriber: Subscriber, treasury: TreasurySnapshot, quotes: Map<BankName, BankQuote>, now: Date) {
@@ -470,5 +547,10 @@ export async function handleOutlookInternal(request: Request, env: OutlookDigest
     try { return Response.json(await quoteHealth(env), { headers: { "Cache-Control": "no-store" } }); }
     catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to check current quote health." }, { status: 503, headers: { "Cache-Control": "no-store" } }); }
   }
+  if (url.pathname === "/internal/outlook/prefetch-first-american") {
+    try { return Response.json(await prefetchFirstAmerican(env, new Date()), { headers: { "Cache-Control": "no-store" } }); }
+    catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to prefetch First American rates." }, { status: 503, headers: { "Cache-Control": "no-store" } }); }
+  }
   return Response.json({ error: "Not found" }, { status: 404 });
 }
+import puppeteer, { type BrowserWorker } from "@cloudflare/puppeteer";

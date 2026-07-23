@@ -334,7 +334,7 @@ function fifthThirdRates(text: string): Quote[] {
   return [...rates.values()].sort((a, b) => a.months - b.months || a.apy - b.apy).slice(0, 12);
 }
 
-async function savedDesktopRates(bank: string, zipCode: string): Promise<{ rates: Quote[]; retrievedAt?: string }> {
+async function savedCollectedRates(bank: string, zipCode: string): Promise<{ rates: Quote[]; retrievedAt?: string }> {
   if (bank !== "Citizens Bank" && bank !== "Fifth Third" && bank !== "First American Bank" && bank !== "PNC") return { rates: [] };
   const rows = await getDb().select({ term: bankRateObservations.term, termMonths: bankRateObservations.termMonths, apy: bankRateObservations.apy, observedAt: bankRateObservations.observedAt }).from(bankRateObservations).where(and(eq(bankRateObservations.bank, bank), eq(bankRateObservations.zipCode, zipCode))).orderBy(desc(bankRateObservations.observedAt)).limit(12);
   const latest = rows[0]?.observedAt;
@@ -501,18 +501,18 @@ export async function GET(request: Request) {
   if (!/^\d{5}$/.test(zipCode)) return Response.json({ error: "Enter a five-digit U.S. ZIP code." }, { status: 400, headers: { "Cache-Control": "no-store" } });
   const source = banks[bank as keyof typeof banks];
   try {
-    // Citizens is collected locally before the email cycle because its upstream
-    // public feed rejects Cloudflare Worker requests. Prefer that fresh ZIP data.
-    const earlySaved = bank === "Citizens Bank" || bank === "First American Bank" ? await savedDesktopRates(bank, zipCode).catch(() => ({ rates: [] })) : { rates: [] };
+    // Prefer the scheduled, ZIP-specific D1 observation for sources that are
+    // less reliable when queried directly during the email run.
+    const earlySaved = bank === "Citizens Bank" || bank === "First American Bank" ? await savedCollectedRates(bank, zipCode).catch(() => ({ rates: [] })) : { rates: [] };
     const quote = earlySaved.rates.length ? { rates: [], retrieval: "unavailable" } : bank === "Synchrony Bank" ? { rates: await synchronyRates(), retrieval: "official-feed" } : await readPublicRatePage(source, zipCode);
-    const saved = earlySaved.rates.length ? earlySaved : !quote.rates.length ? await savedDesktopRates(bank, zipCode).catch(() => ({ rates: [] })) : { rates: [] };
+    const saved = earlySaved.rates.length ? earlySaved : !quote.rates.length ? await savedCollectedRates(bank, zipCode).catch(() => ({ rates: [] })) : { rates: [] };
     const rates = quote.rates.length ? quote.rates : saved.rates;
     if (!rates.length) {
       const retryAfter = "retryAfter" in quote ? quote.retryAfter : undefined;
       const error = retryAfter ? "ZIP-specific browser capacity is temporarily exhausted. Please try again shortly." : "The bank did not return a usable public CD quote for this ZIP. Use the official link to confirm availability.";
       return Response.json({ error, source: source.url, locationSensitive: source.local, retrieval: quote.retrieval, retryAfter }, { status: retryAfter ? 503 : 424, headers: retryAfter ? { "Retry-After": String(retryAfter), "Cache-Control": "no-store" } : { "Cache-Control": "no-store" } });
     }
-    return Response.json({ bank, zipCode, rates, source: source.url, locationSensitive: source.local, retrieval: quote.rates.length ? quote.retrieval : "desktop-public-page", retrievedAt: saved.retrievedAt ?? new Date().toISOString() }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ bank, zipCode, rates, source: source.url, locationSensitive: source.local, retrieval: quote.rates.length ? quote.retrieval : "scheduled-public-page", retrievedAt: saved.retrievedAt ?? new Date().toISOString() }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return Response.json({ error: "The live bank quote is temporarily unavailable.", source: source.url, locationSensitive: source.local }, { status: 503, headers: { "Cache-Control": "no-store" } });
   }

@@ -1,7 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import { handleOutlookInternal, runScheduledDigest, type OutlookDigestEnv } from "./outlook-digest";
+import { handleOutlookInternal, runFirstAmericanPrefetch, runScheduledDigest, type OutlookDigestEnv } from "./outlook-digest";
 
 interface Env extends OutlookDigestEnv {
   ASSETS: Fetcher;
@@ -47,6 +47,9 @@ const worker = {
     return handler.fetch(request, env, ctx);
   },
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(runFirstAmericanPrefetch(env, controller.scheduledTime).catch((error) => {
+      console.error(JSON.stringify({ event: "first_american_prefetch_failed", error: error instanceof Error ? error.message : String(error) }));
+    }));
     ctx.waitUntil(runScheduledDigest(env, controller.scheduledTime).catch((error) => {
       console.error(JSON.stringify({ event: "daily_digest_scheduler_failed", error: error instanceof Error ? error.message : String(error) }));
     }));
