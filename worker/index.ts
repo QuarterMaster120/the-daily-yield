@@ -1,7 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import { handleOutlookInternal, runFirstAmericanPrefetch, runScheduledDigest, type OutlookDigestEnv } from "./outlook-digest";
+import { digestMonitorHealth, handleOutlookInternal, runDailyWatchdog, runFirstAmericanPrefetch, runScheduledDigest, type OutlookDigestEnv } from "./outlook-digest";
 
 interface Env extends OutlookDigestEnv {
   ASSETS: Fetcher;
@@ -30,6 +30,11 @@ const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
+    if (url.pathname === "/api/system-health" && request.method === "GET") {
+      const health = await digestMonitorHealth(env);
+      return Response.json(health, { status: health.status === "healthy" ? 200 : 503, headers: { "Cache-Control": "no-store" } });
+    }
+
     const internalResponse = await handleOutlookInternal(request, env);
     if (internalResponse) return internalResponse;
 
@@ -47,12 +52,17 @@ const worker = {
     return handler.fetch(request, env, ctx);
   },
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(runFirstAmericanPrefetch(env, controller.scheduledTime).catch((error) => {
-      console.error(JSON.stringify({ event: "first_american_prefetch_failed", error: error instanceof Error ? error.message : String(error) }));
-    }));
-    ctx.waitUntil(runScheduledDigest(env, controller.scheduledTime).catch((error) => {
-      console.error(JSON.stringify({ event: "daily_digest_scheduler_failed", error: error instanceof Error ? error.message : String(error) }));
-    }));
+    ctx.waitUntil((async () => {
+      try {
+        await runFirstAmericanPrefetch(env, controller.scheduledTime);
+      } catch (error) {
+        // Keep the subscriber email on schedule; the watchdog records a stale
+        // First American observation as a failed health check at 5:20 AM ET.
+        console.error(JSON.stringify({ event: "first_american_prefetch_failed", error: error instanceof Error ? error.message : String(error) }));
+      }
+      await runScheduledDigest(env, controller.scheduledTime);
+    })());
+    ctx.waitUntil(runDailyWatchdog(env, controller.scheduledTime));
   },
 };
 

@@ -37,6 +37,7 @@ type BankQuote = { source: string; rates: Quote[]; error?: string };
 type StoredConnection = { refresh_token_ciphertext: string; sender_email: string };
 type StoredDeviceAuthorization = { device_code_ciphertext: string; expires_at: number };
 type TokenResponse = { access_token?: string; refresh_token?: string; error?: string; error_description?: string };
+type DigestRun = { status: string; subscriber_count: number; sent_count: number; skipped_count: number; failed_count: number; error_code: string | null; updated_at: string };
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -157,7 +158,29 @@ async function ensureEmailTables(env: OutlookDigestEnv) {
     env.DB.prepare("CREATE TABLE IF NOT EXISTS outlook_sender_connection (id INTEGER PRIMARY KEY CHECK (id = 1), refresh_token_ciphertext TEXT NOT NULL, sender_email TEXT NOT NULL, connected_at TEXT NOT NULL)"),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS outlook_device_authorizations (id TEXT PRIMARY KEY, device_code_ciphertext TEXT NOT NULL, expires_at INTEGER NOT NULL)"),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS email_delivery_log (delivery_key TEXT PRIMARY KEY, delivered_at TEXT NOT NULL)"),
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS daily_digest_runs (run_date TEXT PRIMARY KEY, status TEXT NOT NULL, subscriber_count INTEGER NOT NULL DEFAULT 0, sent_count INTEGER NOT NULL DEFAULT 0, skipped_count INTEGER NOT NULL DEFAULT 0, failed_count INTEGER NOT NULL DEFAULT 0, error_code TEXT, started_at TEXT NOT NULL, finished_at TEXT, updated_at TEXT NOT NULL)"),
   ]);
+}
+
+function monitoringErrorCode(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/Microsoft rejected the Outlook connection|Outlook has not been connected|sender mailbox/i.test(message)) return "OUTLOOK_AUTH";
+  if (/Microsoft Graph sendMail/i.test(message)) return "GRAPH_SEND";
+  if (/Treasury data/i.test(message)) return "TREASURY_SOURCE";
+  if (/First American/i.test(message)) return "FIRST_AMERICAN_SOURCE";
+  return "DIGEST_FAILURE";
+}
+
+async function startDigestRun(env: OutlookDigestEnv, date: string) {
+  const now = new Date().toISOString();
+  await env.DB.prepare("INSERT INTO daily_digest_runs (run_date, status, started_at, updated_at) VALUES (?, 'running', ?, ?) ON CONFLICT(run_date) DO UPDATE SET status = 'running', subscriber_count = 0, sent_count = 0, skipped_count = 0, failed_count = 0, error_code = NULL, started_at = excluded.started_at, finished_at = NULL, updated_at = excluded.updated_at")
+    .bind(date, now, now).run();
+}
+
+async function finishDigestRun(env: OutlookDigestEnv, date: string, result: { status: "success" | "degraded" | "failed"; subscribers: number; sent: number; skipped: number; failed: number; errorCode?: string }) {
+  const now = new Date().toISOString();
+  await env.DB.prepare("UPDATE daily_digest_runs SET status = ?, subscriber_count = ?, sent_count = ?, skipped_count = ?, failed_count = ?, error_code = ?, finished_at = ?, updated_at = ? WHERE run_date = ?")
+    .bind(result.status, result.subscribers, result.sent, result.skipped, result.failed, result.errorCode ?? null, now, now, date).run();
 }
 
 function parsedSelections<T extends string>(value: string, allowed: readonly T[], fallback: readonly T[]) {
@@ -311,7 +334,7 @@ async function prefetchFirstAmerican(env: OutlookDigestEnv, observedAt: Date) {
 
 export async function runFirstAmericanPrefetch(env: OutlookDigestEnv, scheduledTime: number) {
   const scheduledAt = new Date(scheduledTime); const eastern = easternDate(scheduledAt);
-  if (!(eastern.weekday === "Mon" || eastern.weekday === "Tue" || eastern.weekday === "Wed" || eastern.weekday === "Thu" || eastern.weekday === "Fri") || eastern.hour !== "04" || eastern.minute !== "45") return { stored: 0, skipped: "outside-window" as const };
+  if (!(eastern.weekday === "Mon" || eastern.weekday === "Tue" || eastern.weekday === "Wed" || eastern.weekday === "Thu" || eastern.weekday === "Fri") || eastern.hour !== "05" || eastern.minute !== "00") return { stored: 0, skipped: "outside-window" as const };
   return prefetchFirstAmerican(env, scheduledAt);
 }
 
@@ -417,22 +440,35 @@ async function sendToSubscriber(env: OutlookDigestEnv, subscriber: Subscriber, a
 
 async function deliverDigest(env: OutlookDigestEnv, runAt: Date, force: boolean, bypassIdempotency = false) {
   const eastern = easternDate(runAt);
-  if (!force && !(["Mon", "Tue", "Wed", "Thu", "Fri"].includes(eastern.weekday) && eastern.hour === "05")) return { sent: 0, skipped: 0, skippedBySchedule: true };
+  if (!force && !(["Mon", "Tue", "Wed", "Thu", "Fri"].includes(eastern.weekday) && eastern.hour === "05" && eastern.minute === "00")) return { sent: 0, skipped: 0, skippedBySchedule: true };
   await ensureEmailTables(env);
-  const recipients = await subscribers(env);
-  if (!recipients.length) return { sent: 0, skipped: 0, skippedBySchedule: false };
-  const [access, treasury] = await Promise.all([accessToken(env), treasurySnapshot(runAt)]);
-  const quoteCache = new Map<string, Promise<BankQuote>>(); let sent = 0; let skipped = 0;
-  for (const recipient of recipients) {
-    try {
-      if (await sendToSubscriber(env, recipient, access, treasury, quoteCache, !bypassIdempotency) === "sent") sent += 1;
-      else skipped += 1;
-    } catch (error) {
-      console.error(JSON.stringify({ event: "daily_digest_delivery_failed", error: error instanceof Error ? error.message : String(error) }));
+  const monitored = !force;
+  if (monitored) await startDigestRun(env, eastern.date);
+  try {
+    const recipients = await subscribers(env);
+    if (!recipients.length) {
+      if (monitored) await finishDigestRun(env, eastern.date, { status: "success", subscribers: 0, sent: 0, skipped: 0, failed: 0 });
+      return { sent: 0, skipped: 0, skippedBySchedule: false };
     }
+    const [access, treasury] = await Promise.all([accessToken(env), treasurySnapshot(runAt)]);
+    const quoteCache = new Map<string, Promise<BankQuote>>(); let sent = 0; let skipped = 0; let failed = 0; let errorCode: string | undefined;
+    for (const recipient of recipients) {
+      try {
+        if (await sendToSubscriber(env, recipient, access, treasury, quoteCache, !bypassIdempotency) === "sent") sent += 1;
+        else skipped += 1;
+      } catch (error) {
+        failed += 1; errorCode ??= monitoringErrorCode(error);
+        console.error(JSON.stringify({ event: "daily_digest_delivery_failed", error: error instanceof Error ? error.message : String(error) }));
+      }
+    }
+    const status = failed ? "degraded" : "success";
+    if (monitored) await finishDigestRun(env, eastern.date, { status, subscribers: recipients.length, sent, skipped, failed, errorCode });
+    console.log(JSON.stringify({ event: "daily_digest_finished", status, sent, skipped, failed, date: eastern.date }));
+    return { sent, skipped, skippedBySchedule: false };
+  } catch (error) {
+    if (monitored) await finishDigestRun(env, eastern.date, { status: "failed", subscribers: 0, sent: 0, skipped: 0, failed: 0, errorCode: monitoringErrorCode(error) }).catch(() => undefined);
+    throw error;
   }
-  console.log(JSON.stringify({ event: "daily_digest_finished", sent, skipped, date: eastern.date }));
-  return { sent, skipped, skippedBySchedule: false };
 }
 
 export function runScheduledDigest(env: OutlookDigestEnv, scheduledTime: number) {
@@ -441,6 +477,38 @@ export function runScheduledDigest(env: OutlookDigestEnv, scheduledTime: number)
 
 export function runManualDigest(env: OutlookDigestEnv) {
   return deliverDigest(env, new Date(), true, true);
+}
+
+export async function digestMonitorHealth(env: OutlookDigestEnv, now = new Date()) {
+  await ensureEmailTables(env);
+  const eastern = easternDate(now);
+  const requiresToday = ["Mon", "Tue", "Wed", "Thu", "Fri"].includes(eastern.weekday) && (eastern.hour > "05" || eastern.hour === "05" && eastern.minute >= "20");
+  const run = await env.DB.prepare("SELECT status, subscriber_count, sent_count, skipped_count, failed_count, error_code, updated_at FROM daily_digest_runs WHERE run_date = ?").bind(eastern.date).first<DigestRun>();
+  const issues: string[] = [];
+  if (requiresToday && !run) issues.push("DIGEST_MISSING");
+  if (run?.status === "failed") issues.push(run.error_code ?? "DIGEST_FAILURE");
+  if (run?.status === "degraded" || (run && run.sent_count + run.skipped_count !== run.subscriber_count)) issues.push(run.error_code ?? "DELIVERY_INCOMPLETE");
+  const recipients = await subscribers(env);
+  if (recipients.some((subscriber) => subscriber.banks.includes("First American Bank"))) {
+    const observation = await env.DB.prepare("SELECT MAX(observed_on) AS observed_on FROM bank_rate_observations WHERE bank = ?").bind("First American Bank").first<{ observed_on: string | null }>();
+    if (!observation?.observed_on || observation.observed_on < eastern.date) issues.push("FIRST_AMERICAN_STALE");
+  }
+  return {
+    status: issues.length ? "degraded" as const : "healthy" as const,
+    date: eastern.date,
+    checksRequired: requiresToday,
+    lastRun: run ? { status: run.status, subscribers: run.subscriber_count, sent: run.sent_count, skipped: run.skipped_count, failed: run.failed_count, updatedAt: run.updated_at } : null,
+    issues,
+  };
+}
+
+export async function runDailyWatchdog(env: OutlookDigestEnv, scheduledTime: number) {
+  const scheduledAt = new Date(scheduledTime); const eastern = easternDate(scheduledAt);
+  if (!( ["Mon", "Tue", "Wed", "Thu", "Fri"].includes(eastern.weekday) && eastern.hour === "05" && eastern.minute === "20")) return { skipped: "outside-window" as const };
+  const health = await digestMonitorHealth(env, scheduledAt);
+  console.log(JSON.stringify({ event: "daily_yield_watchdog", ...health }));
+  if (health.status !== "healthy") throw new Error(`Daily Yield monitor failed: ${health.issues.join(", ")}`);
+  return health;
 }
 
 async function quoteHealth(env: OutlookDigestEnv) {
