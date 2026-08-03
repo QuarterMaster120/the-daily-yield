@@ -6,6 +6,7 @@ const TOKEN_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/
 const DEVICE_CODE_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
 const TREASURY_SOURCE = "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml";
 const FIRST_AMERICAN_SOURCE = "https://www.firstambank.com/Personal/Explore/Rates/Deposit-Rates";
+const FIFTH_THIRD_SOURCE = "https://openonline.53.com/apps/oc/rates.html?productType=cd";
 const FIRST_AMERICAN_FALLBACK_SOURCES = [
   FIRST_AMERICAN_SOURCE,
   "https://www.firstambank.com/Personal/Save/Certificates-of-Deposit",
@@ -288,6 +289,16 @@ function firstAmericanRates(text: string): Quote[] {
   return [...rates.values()].sort((left, right) => left.months - right.months).slice(0, 12);
 }
 
+function fifthThirdRates(text: string): Quote[] {
+  const promotionalSection = text.split(/Standard CD Interest Rates/i)[0];
+  const rates = new Map<number, Quote>();
+  for (const match of promotionalSection.matchAll(/(\d{1,2})\s*Month\s+CD\s+Promo[\s\S]{0,160}?(\d(?:\.\d+)?)%[\s\S]{0,80}?(\d(?:\.\d+)?)%/gi)) {
+    const months = Number(match[1]); const apy = Number(match[3]);
+    if (Number.isInteger(months) && months >= 1 && months <= 120 && Number.isFinite(apy) && apy >= 0 && apy <= 20) rates.set(months, { months, term: `${months} ${months === 1 ? "Month" : "Months"}`, apy });
+  }
+  return [...rates.values()].sort((left, right) => left.months - right.months).slice(0, 12);
+}
+
 async function browserFirstAmericanRates(env: OutlookDigestEnv) {
   if (!env.BROWSER) return [];
   let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
@@ -334,8 +345,59 @@ async function prefetchFirstAmerican(env: OutlookDigestEnv, observedAt: Date) {
 
 export async function runFirstAmericanPrefetch(env: OutlookDigestEnv, scheduledTime: number) {
   const scheduledAt = new Date(scheduledTime); const eastern = easternDate(scheduledAt);
-  if (!(eastern.weekday === "Mon" || eastern.weekday === "Tue" || eastern.weekday === "Wed" || eastern.weekday === "Thu" || eastern.weekday === "Fri") || eastern.hour !== "05" || eastern.minute !== "00") return { stored: 0, skipped: "outside-window" as const };
+  if (!(eastern.weekday === "Mon" || eastern.weekday === "Tue" || eastern.weekday === "Wed" || eastern.weekday === "Thu" || eastern.weekday === "Fri") || eastern.hour !== "04" || eastern.minute !== "45") return { stored: 0, skipped: "outside-window" as const };
   return prefetchFirstAmerican(env, scheduledAt);
+}
+
+async function fifthThirdRatesForZip(env: OutlookDigestEnv, zipCode: string) {
+  if (!env.BROWSER) throw new Error("Cloudflare Browser Rendering is not configured.");
+  const limits = await puppeteer.limits(env.BROWSER);
+  if (limits.allowedBrowserAcquisitions < 1) throw new Error("Cloudflare Browser Rendering capacity is temporarily exhausted.");
+  let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
+  try {
+    browser = await puppeteer.launch(env.BROWSER);
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1440, height: 1000 });
+    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0 Safari/537.36");
+    await page.goto(FIFTH_THIRD_SOURCE, { waitUntil: "domcontentloaded", timeout: 20_000 });
+    const input = await page.$("#enter-zip");
+    const submit = await page.$("form.zip-form button");
+    if (!input || !submit) throw new Error("Fifth Third did not display its public ZIP form.");
+    await input.click({ clickCount: 3 });
+    await page.keyboard.press("Control+A");
+    await input.type(zipCode);
+    await submit.click();
+    await page.waitForFunction(() => {
+      const text = document.body?.innerText ?? "";
+      return /(?:APY|Annual Percentage Yield)/i.test(text) && /\b\d+\s*Month\s+CD\s+Promo/i.test(text);
+    }, { timeout: 15_000 });
+    const text = await page.evaluate(() => document.body?.innerText ?? "");
+    if (/captcha|verify you are human|unusual traffic|access denied|oops, something went wrong/i.test(text)) throw new Error("Fifth Third did not return a usable public rate page.");
+    const rates = fifthThirdRates(text);
+    if (!rates.length) throw new Error("Fifth Third returned no promotional CD APYs.");
+    return rates;
+  } finally { await browser?.close().catch(() => undefined); }
+}
+
+async function prefetchFifthThird(env: OutlookDigestEnv, observedAt: Date) {
+  const recipients = await subscribers(env);
+  const zipCodes = [...new Set(recipients.filter((subscriber) => subscriber.banks.includes("Fifth Third")).map((subscriber) => subscriber.zipCode))];
+  if (!zipCodes.length) return { stored: 0, skipped: "no-subscribers" as const };
+  const observedOn = easternDate(observedAt).date;
+  const statements = [] as D1PreparedStatement[];
+  for (const zipCode of zipCodes) {
+    const rates = await fifthThirdRatesForZip(env, zipCode);
+    statements.push(...rates.map((rate) => env.DB.prepare("INSERT INTO bank_rate_observations (bank, zip_code, term_months, term, apy, observed_at, observed_on, source, retrieval) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(bank, zip_code, term_months, observed_on) DO UPDATE SET term = excluded.term, apy = excluded.apy, observed_at = excluded.observed_at, source = excluded.source, retrieval = excluded.retrieval")
+      .bind("Fifth Third", zipCode, rate.months, rate.term, rate.apy, observedAt.toISOString(), observedOn, FIFTH_THIRD_SOURCE, "cloudflare-scheduled-page")));
+  }
+  await env.DB.batch(statements);
+  return { stored: statements.length, skipped: false as const };
+}
+
+export async function runFifthThirdPrefetch(env: OutlookDigestEnv, scheduledTime: number) {
+  const scheduledAt = new Date(scheduledTime); const eastern = easternDate(scheduledAt);
+  if (!(eastern.weekday === "Mon" || eastern.weekday === "Tue" || eastern.weekday === "Wed" || eastern.weekday === "Thu" || eastern.weekday === "Fri") || eastern.hour !== "04" || eastern.minute !== "45") return { stored: 0, skipped: "outside-window" as const };
+  return prefetchFifthThird(env, scheduledAt);
 }
 
 async function emailBody(env: OutlookDigestEnv, subscriber: Subscriber, treasury: TreasurySnapshot, quotes: Map<BankName, BankQuote>, now: Date) {
@@ -493,6 +555,10 @@ export async function digestMonitorHealth(env: OutlookDigestEnv, now = new Date(
     const observation = await env.DB.prepare("SELECT MAX(observed_on) AS observed_on FROM bank_rate_observations WHERE bank = ?").bind("First American Bank").first<{ observed_on: string | null }>();
     if (!observation?.observed_on || observation.observed_on < eastern.date) issues.push("FIRST_AMERICAN_STALE");
   }
+  if (recipients.some((subscriber) => subscriber.banks.includes("Fifth Third"))) {
+    const observation = await env.DB.prepare("SELECT MAX(observed_on) AS observed_on FROM bank_rate_observations WHERE bank = ?").bind("Fifth Third").first<{ observed_on: string | null }>();
+    if (!observation?.observed_on || observation.observed_on < eastern.date) issues.push("FIFTH_THIRD_STALE");
+  }
   return {
     status: issues.length ? "degraded" as const : "healthy" as const,
     date: eastern.date,
@@ -504,7 +570,7 @@ export async function digestMonitorHealth(env: OutlookDigestEnv, now = new Date(
 
 export async function runDailyWatchdog(env: OutlookDigestEnv, scheduledTime: number) {
   const scheduledAt = new Date(scheduledTime); const eastern = easternDate(scheduledAt);
-  if (!( ["Mon", "Tue", "Wed", "Thu", "Fri"].includes(eastern.weekday) && eastern.hour === "05" && eastern.minute === "20")) return { skipped: "outside-window" as const };
+  if (!( ["Mon", "Tue", "Wed", "Thu", "Fri"].includes(eastern.weekday) && (eastern.hour === "05" || eastern.hour === "06") && eastern.minute === "20")) return { skipped: "outside-window" as const };
   const health = await digestMonitorHealth(env, scheduledAt);
   console.log(JSON.stringify({ event: "daily_yield_watchdog", ...health }));
   if (health.status !== "healthy") throw new Error(`Daily Yield monitor failed: ${health.issues.join(", ")}`);

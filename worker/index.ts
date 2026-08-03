@@ -1,7 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import { digestMonitorHealth, handleOutlookInternal, runDailyWatchdog, runFirstAmericanPrefetch, runScheduledDigest, type OutlookDigestEnv } from "./outlook-digest";
+import { digestMonitorHealth, handleOutlookInternal, runDailyWatchdog, runFifthThirdPrefetch, runFirstAmericanPrefetch, runScheduledDigest, type OutlookDigestEnv } from "./outlook-digest";
 
 interface Env extends OutlookDigestEnv {
   ASSETS: Fetcher;
@@ -53,12 +53,13 @@ const worker = {
   },
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil((async () => {
-      try {
-        await runFirstAmericanPrefetch(env, controller.scheduledTime);
-      } catch (error) {
-        // Keep the subscriber email on schedule; the watchdog records a stale
-        // First American observation as a failed health check at 5:20 AM ET.
-        console.error(JSON.stringify({ event: "first_american_prefetch_failed", error: error instanceof Error ? error.message : String(error) }));
+      const prefetches = [
+        { bank: "first_american", run: runFirstAmericanPrefetch(env, controller.scheduledTime) },
+        { bank: "fifth_third", run: runFifthThirdPrefetch(env, controller.scheduledTime) },
+      ];
+      const results = await Promise.allSettled(prefetches.map((prefetch) => prefetch.run));
+      for (const [index, result] of results.entries()) if (result.status === "rejected") {
+        console.error(JSON.stringify({ event: `${prefetches[index].bank}_prefetch_failed`, error: result.reason instanceof Error ? result.reason.message : String(result.reason) }));
       }
       await runScheduledDigest(env, controller.scheduledTime);
     })());

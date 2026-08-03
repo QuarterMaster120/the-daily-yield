@@ -17,6 +17,6 @@
     "head_sampling_rate": 1
   },
   "triggers": {
-    "crons": ["0 9,10 * * MON-FRI", "20 9,10 * * MON-FRI"]
+    "crons": ["45 8,9 * * MON-FRI", "0 9,10 * * MON-FRI", "20 10 * * MON-FRI"]
   }
 }
