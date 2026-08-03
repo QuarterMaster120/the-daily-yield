@@ -1,7 +1,7 @@
 import { asc, eq, ne } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { subscribers } from "../../../db/schema";
-import { hasIngestToken } from "../collector-auth";
+import { hasCollectorToken, hasIngestToken } from "../collector-auth";
 
 export async function GET(request: Request) {
   if (!await hasIngestToken(request)) return Response.json({ error: "Unauthorized" }, { status: 401, headers: { "Cache-Control": "no-store" } });
@@ -14,9 +14,24 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  if (!await hasIngestToken(request)) return Response.json({ error: "Unauthorized" }, { status: 401, headers: { "Cache-Control": "no-store" } });
+  const canWriteSelections = await hasCollectorToken(request, "RATE_COLLECTION_WRITE_TOKEN");
+  if (!canWriteSelections && !await hasIngestToken(request)) return Response.json({ error: "Unauthorized" }, { status: 401, headers: { "Cache-Control": "no-store" } });
   try {
-    const action = await request.json().catch(() => null) as { email?: unknown; removeBank?: unknown } | null;
+    const action = await request.json().catch(() => null) as { email?: unknown; removeBank?: unknown; addFirstAmericanToMissingSubscriber?: unknown } | null;
+    if (action?.addFirstAmericanToMissingSubscriber === true) {
+      if (!canWriteSelections) return Response.json({ error: "Unauthorized" }, { status: 401, headers: { "Cache-Control": "no-store" } });
+      const records = await getDb().select({ email: subscribers.email, bankSelections: subscribers.bankSelections }).from(subscribers).where(ne(subscribers.zipCode, ""));
+      const missing = records.flatMap((record) => {
+        try {
+          const selections = JSON.parse(record.bankSelections);
+          return Array.isArray(selections) && !selections.includes("First American Bank") ? [{ ...record, selections: selections.filter((bank): bank is string => typeof bank === "string") }] : [];
+        } catch { return [{ ...record, selections: [] as string[] }]; }
+      });
+      if (missing.length !== 1) return Response.json({ error: "Expected exactly one subscription without First American Bank.", updated: 0 }, { status: 409, headers: { "Cache-Control": "no-store" } });
+      const target = missing[0];
+      await getDb().update(subscribers).set({ bankSelections: JSON.stringify([...new Set([...target.selections, "First American Bank"])]) }).where(eq(subscribers.email, target.email));
+      return Response.json({ ok: true, updated: 1 }, { headers: { "Cache-Control": "no-store" } });
+    }
     if (typeof action?.email === "string" && typeof action.removeBank === "string") {
       const email = action.email.trim().toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || action.removeBank !== "First American Bank") return Response.json({ error: "Invalid subscriber update." }, { status: 400, headers: { "Cache-Control": "no-store" } });
