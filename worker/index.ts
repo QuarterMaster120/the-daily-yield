@@ -52,7 +52,8 @@ const worker = {
     return handler.fetch(request, env, ctx);
   },
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil((async () => {
+    if (controller.cron === "45 8,9 * * MON-FRI") {
+      ctx.waitUntil((async () => {
       const prefetches = [
         { bank: "first_american", run: runFirstAmericanPrefetch(env, controller.scheduledTime) },
         { bank: "fifth_third", run: runFifthThirdPrefetch(env, controller.scheduledTime) },
@@ -61,8 +62,15 @@ const worker = {
       for (const [index, result] of results.entries()) if (result.status === "rejected") {
         console.error(JSON.stringify({ event: `${prefetches[index].bank}_prefetch_failed`, error: result.reason instanceof Error ? result.reason.message : String(result.reason) }));
       }
-      await runScheduledDigest(env, controller.scheduledTime);
-    })());
+      })());
+      return;
+    }
+
+    if (controller.cron === "0 9,10 * * MON-FRI") {
+      ctx.waitUntil(runScheduledDigest(env, controller.scheduledTime));
+      return;
+    }
+
     ctx.waitUntil(runDailyWatchdog(env, controller.scheduledTime));
   },
 };

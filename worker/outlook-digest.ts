@@ -502,7 +502,9 @@ async function sendToSubscriber(env: OutlookDigestEnv, subscriber: Subscriber, a
 
 async function deliverDigest(env: OutlookDigestEnv, runAt: Date, force: boolean, bypassIdempotency = false) {
   const eastern = easternDate(runAt);
-  if (!force && !(["Mon", "Tue", "Wed", "Thu", "Fri"].includes(eastern.weekday) && eastern.hour === "05" && eastern.minute === "00")) return { sent: 0, skipped: 0, skippedBySchedule: true };
+  // The second UTC trigger covers the daylight-saving transition and acts as a
+  // retry at 06:00 ET. Delivery reservations prevent duplicate emails.
+  if (!force && !(["Mon", "Tue", "Wed", "Thu", "Fri"].includes(eastern.weekday) && ["05", "06"].includes(eastern.hour) && eastern.minute === "00")) return { sent: 0, skipped: 0, skippedBySchedule: true };
   await ensureEmailTables(env);
   const monitored = !force;
   if (monitored) await startDigestRun(env, eastern.date);
