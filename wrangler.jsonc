@@ -12,6 +12,14 @@
       "service": "yield-atlas"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "DAILY_SCHEDULER", "class_name": "DailyDigestScheduler" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1-add-daily-digest-scheduler", "new_sqlite_classes": ["DailyDigestScheduler"] }
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1

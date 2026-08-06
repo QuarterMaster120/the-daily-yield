@@ -1,11 +1,15 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import { digestMonitorHealth, handleOutlookInternal, runDailyWatchdog, runFifthThirdPrefetch, runFirstAmericanPrefetch, runScheduledDigest, type OutlookDigestEnv } from "./outlook-digest";
+import { digestMonitorHealth, handleOutlookInternal, runFifthThirdPrefetch, runFirstAmericanPrefetch, type OutlookDigestEnv } from "./outlook-digest";
+import { DailyDigestScheduler, dailyDigestSchedulerName } from "./daily-digest-scheduler";
+
+export { DailyDigestScheduler } from "./daily-digest-scheduler";
 
 interface Env extends OutlookDigestEnv {
   ASSETS: Fetcher;
   BROWSER: BrowserWorker;
+  DAILY_SCHEDULER: DurableObjectNamespace<DailyDigestScheduler>;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -31,8 +35,10 @@ const worker = {
     const url = new URL(request.url);
 
     if (url.pathname === "/api/system-health" && request.method === "GET") {
+      const scheduler = env.DAILY_SCHEDULER.getByName(dailyDigestSchedulerName());
+      await scheduler.ensureScheduled(Date.now());
       const health = await digestMonitorHealth(env);
-      return Response.json(health, { status: health.status === "healthy" ? 200 : 503, headers: { "Cache-Control": "no-store" } });
+      return Response.json({ ...health, scheduler: await scheduler.status() }, { status: health.status === "healthy" ? 200 : 503, headers: { "Cache-Control": "no-store" } });
     }
 
     const internalResponse = await handleOutlookInternal(request, env);
@@ -52,6 +58,8 @@ const worker = {
     return handler.fetch(request, env, ctx);
   },
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    const scheduler = env.DAILY_SCHEDULER.getByName(dailyDigestSchedulerName());
+    ctx.waitUntil(scheduler.ensureScheduled(controller.scheduledTime));
     if (controller.cron === "45 8,9 * * MON-FRI") {
       ctx.waitUntil((async () => {
       const prefetches = [
@@ -65,13 +73,6 @@ const worker = {
       })());
       return;
     }
-
-    if (controller.cron === "0 9,10 * * MON-FRI") {
-      ctx.waitUntil(runScheduledDigest(env, controller.scheduledTime));
-      return;
-    }
-
-    ctx.waitUntil(runDailyWatchdog(env, controller.scheduledTime));
   },
 };
 

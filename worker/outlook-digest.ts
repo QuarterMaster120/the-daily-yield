@@ -214,7 +214,7 @@ async function subscribers(env: OutlookDigestEnv, recipient?: string) {
   });
 }
 
-function easternDate(time: Date) {
+export function easternDate(time: Date) {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(time);
   const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
   return { date: `${part("year")}-${part("month")}-${part("day")}`, weekday: part("weekday"), hour: part("hour"), minute: part("minute") };
@@ -504,7 +504,7 @@ async function deliverDigest(env: OutlookDigestEnv, runAt: Date, force: boolean,
   const eastern = easternDate(runAt);
   // The second UTC trigger covers the daylight-saving transition and acts as a
   // retry at 06:00 ET. Delivery reservations prevent duplicate emails.
-  if (!force && !(["Mon", "Tue", "Wed", "Thu", "Fri"].includes(eastern.weekday) && ["05", "06"].includes(eastern.hour) && eastern.minute === "00")) return { sent: 0, skipped: 0, skippedBySchedule: true };
+  if (!force && !(["Mon", "Tue", "Wed", "Thu", "Fri"].includes(eastern.weekday) && ["05", "06"].includes(eastern.hour) && eastern.minute === "00")) return { sent: 0, skipped: 0, failed: 0, skippedBySchedule: true };
   await ensureEmailTables(env);
   const monitored = !force;
   if (monitored) await startDigestRun(env, eastern.date);
@@ -528,7 +528,7 @@ async function deliverDigest(env: OutlookDigestEnv, runAt: Date, force: boolean,
     const status = failed ? "degraded" : "success";
     if (monitored) await finishDigestRun(env, eastern.date, { status, subscribers: recipients.length, sent, skipped, failed, errorCode });
     console.log(JSON.stringify({ event: "daily_digest_finished", status, sent, skipped, failed, date: eastern.date }));
-    return { sent, skipped, skippedBySchedule: false };
+    return { sent, skipped, failed, skippedBySchedule: false };
   } catch (error) {
     if (monitored) await finishDigestRun(env, eastern.date, { status: "failed", subscribers: 0, sent: 0, skipped: 0, failed: 0, errorCode: monitoringErrorCode(error) }).catch(() => undefined);
     throw error;
