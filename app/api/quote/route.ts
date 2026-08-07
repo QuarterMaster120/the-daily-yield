@@ -226,7 +226,7 @@ async function chaseRates(zipCode: string): Promise<Quote[]> {
   for (const [label, values] of Object.entries(data.ratesData?.rates ?? {})) {
     const months = Number(label.match(/^(\d+)-Month$/i)?.[1]);
     // These Chase standard-CD terms are intentionally not reported.
-    if (months === 5 || months === 8 || months === 13 || months === 14) continue;
+    if (months === 1 || months === 2 || months === 5 || months === 8 || months === 13 || months === 14) continue;
     const tiers = values.map((value, index) => ({ apy: Number(value.match(/\d+(?:\.\d+)?/)?.[0]), balance: data.ratesData?.cdTermLabels?.[index + 1] ?? "" })).filter((tier) => Number.isFinite(tier.apy));
     const best = tiers.reduce<(typeof tiers)[number] | null>((current, tier) => !current || tier.apy > current.apy ? tier : current, null);
     if (Number.isFinite(months) && best) rates.set(`${months}-${best.apy}`, { months, term: `${months} ${months === 1 ? "Month" : "Months"}`, apy: best.apy, balance: best.balance });
