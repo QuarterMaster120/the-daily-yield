@@ -6,6 +6,9 @@
   "scripts": {
     "init": "node daily-yield-mailer.mjs --init",
     "migrate": "node daily-yield-mailer.mjs --migrate",
+    "outlook:start": "node daily-yield-mailer.mjs --outlook-start",
+    "outlook:complete": "node daily-yield-mailer.mjs --outlook-complete",
+    "outlook:test": "node daily-yield-mailer.mjs --test-outlook",
     "run": "node daily-yield-mailer.mjs --run",
     "dry-run": "node daily-yield-mailer.mjs --dry-run",
     "export:cloudflare": "node export-cloudflare-subscribers.mjs"
