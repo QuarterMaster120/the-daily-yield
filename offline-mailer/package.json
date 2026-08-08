@@ -1,0 +1,14 @@
+{
+  "name": "the-daily-yield-local-mailer",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "scripts": {
+    "init": "node daily-yield-mailer.mjs --init",
+    "migrate": "node daily-yield-mailer.mjs --migrate",
+    "run": "node daily-yield-mailer.mjs --run",
+    "dry-run": "node daily-yield-mailer.mjs --dry-run",
+    "export:cloudflare": "node export-cloudflare-subscribers.mjs"
+  },
+  "dependencies": { "playwright-core": "^1.58.2" }
+}

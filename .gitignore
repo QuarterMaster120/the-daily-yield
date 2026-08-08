@@ -45,3 +45,7 @@ next-env.d.ts
 /rate-ledger.tgz
 /collector/.env
 /collector/logs/
+/offline-mailer/.env
+/offline-mailer/data/
+/offline-mailer/logs/
+/offline-mailer/node_modules/
