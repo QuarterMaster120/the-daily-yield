@@ -19,7 +19,7 @@ const banks = new Set(["Bank of America", "Chase", "Citizens Bank", "Fifth Third
 const treasuryTerms = new Set(["3 Mo", "6 Mo", "1 Yr", "2 Yr", "5 Yr", "10 Yr", "30 Yr"]);
 // Report the established consumer terms only. Chase's raw feed also contains
 // longer standard-CD categories, which are not part of this digest.
-const chaseReportedTerms = new Set([3, 4, 6, 7, 9, 10, 11, 12, 15, 18]);
+const chaseReportedTerms = new Set([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 18]);
 
 function loadEnv(file) { if (!existsSync(file)) return; for (const line of readFileSync(file, "utf8").split(/\r?\n/)) { const match = line.match(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.*?)\s*$/); if (match && !process.env[match[1]]) process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, ""); } }
 function protectedData(operation, value) {
