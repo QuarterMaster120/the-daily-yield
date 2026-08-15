@@ -1,5 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,144 +13,809 @@ import { chromium } from "playwright-core";
 
 const root = dirname(fileURLToPath(import.meta.url));
 loadEnv(join(root, ".env"));
-const dbPath = process.env.DAILY_YIELD_DB || join(root, "data", "the-daily-yield.sqlite");
-const outlookConnectionPath = process.env.DAILY_YIELD_OUTLOOK_CONNECTION || join(root, "data", "outlook-connection.json");
+const dbPath =
+  process.env.DAILY_YIELD_DB || join(root, "data", "the-daily-yield.sqlite");
+const outlookConnectionPath =
+  process.env.DAILY_YIELD_OUTLOOK_CONNECTION ||
+  join(root, "data", "outlook-connection.json");
 const outlookPendingPath = join(root, "data", "outlook-device-code.json");
 const MICROSOFT_CLIENT_ID = "2bef4f41-7653-45b9-bcfe-4dc3557ffded";
 const OUTLOOK_SENDER = "startcodex@outlook.com";
-const GRAPH_SCOPE = "offline_access User.Read https://graph.microsoft.com/Mail.Send";
-const TOKEN_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
-const DEVICE_CODE_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
-const banks = new Set(["Bank of America", "Chase", "Citizens Bank", "Fifth Third", "First American Bank", "Morgan Stanley", "PNC", "Synchrony Bank", "TD Bank", "Truist", "U.S. Bank", "Wells Fargo"]);
-const treasuryTerms = new Set(["3 Mo", "6 Mo", "1 Yr", "2 Yr", "5 Yr", "10 Yr", "30 Yr"]);
+const GRAPH_SCOPE =
+  "offline_access User.Read https://graph.microsoft.com/Mail.Send";
+const TOKEN_ENDPOINT =
+  "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
+const DEVICE_CODE_ENDPOINT =
+  "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
+const banks = new Set([
+  "Bank of America",
+  "Chase",
+  "Citizens Bank",
+  "Fifth Third",
+  "First American Bank",
+  "Morgan Stanley",
+  "PNC",
+  "Synchrony Bank",
+  "TD Bank",
+  "Truist",
+  "U.S. Bank",
+  "Wells Fargo",
+]);
+const treasuryTerms = new Set([
+  "3 Mo",
+  "6 Mo",
+  "1 Yr",
+  "2 Yr",
+  "5 Yr",
+  "10 Yr",
+  "30 Yr",
+]);
 // Report the established consumer terms only. Chase's raw feed also contains
 // longer standard-CD categories, which are not part of this digest.
 const chaseReportedTerms = new Set([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 18]);
 
-function loadEnv(file) { if (!existsSync(file)) return; for (const line of readFileSync(file, "utf8").split(/\r?\n/)) { const match = line.match(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.*?)\s*$/); if (match && !process.env[match[1]]) process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, ""); } }
+function loadEnv(file) {
+  if (!existsSync(file)) return;
+  for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
+    const match = line.match(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (match && !process.env[match[1]])
+      process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, "");
+  }
+}
 function protectedData(operation, value) {
-  if (process.platform !== "win32") throw new Error("The local Outlook connection is supported on Windows only.");
-  const script = operation === "protect"
-    ? "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; $d=[Console]::In.ReadToEnd(); $b=[Convert]::FromBase64String($d); $p=[Security.Cryptography.ProtectedData]::Protect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser); [Console]::Write([Convert]::ToBase64String($p))"
-    : "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; $d=[Console]::In.ReadToEnd(); $b=[Convert]::FromBase64String($d); $p=[Security.Cryptography.ProtectedData]::Unprotect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser); [Console]::Write([Text.Encoding]::UTF8.GetString($p))";
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { input: operation === "protect" ? Buffer.from(value, "utf8").toString("base64") : value, encoding: "utf8", windowsHide: true });
-  if (result.status !== 0 || result.error) throw new Error("Windows could not protect the Outlook connection.");
+  if (process.platform !== "win32")
+    throw new Error(
+      "The local Outlook connection is supported on Windows only.",
+    );
+  const script =
+    operation === "protect"
+      ? "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; $d=[Console]::In.ReadToEnd(); $b=[Convert]::FromBase64String($d); $p=[Security.Cryptography.ProtectedData]::Protect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser); [Console]::Write([Convert]::ToBase64String($p))"
+      : "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; $d=[Console]::In.ReadToEnd(); $b=[Convert]::FromBase64String($d); $p=[Security.Cryptography.ProtectedData]::Unprotect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser); [Console]::Write([Text.Encoding]::UTF8.GetString($p))";
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    {
+      input:
+        operation === "protect"
+          ? Buffer.from(value, "utf8").toString("base64")
+          : value,
+      encoding: "utf8",
+      windowsHide: true,
+    },
+  );
+  if (result.status !== 0 || result.error)
+    throw new Error("Windows could not protect the Outlook connection.");
   return result.stdout.trim();
 }
 function readOutlookConnection() {
   if (!existsSync(outlookConnectionPath)) return null;
   try {
     const stored = JSON.parse(readFileSync(outlookConnectionPath, "utf8"));
-    if (stored?.sender !== OUTLOOK_SENDER || typeof stored?.refreshTokenProtected !== "string") throw new Error("invalid");
-    return { refreshToken: protectedData("unprotect", stored.refreshTokenProtected) };
-  } catch { throw new Error("The local Outlook connection is invalid. Run npm run outlook:connect again."); }
+    if (
+      stored?.sender !== OUTLOOK_SENDER ||
+      typeof stored?.refreshTokenProtected !== "string"
+    )
+      throw new Error("invalid");
+    return {
+      refreshToken: protectedData("unprotect", stored.refreshTokenProtected),
+    };
+  } catch {
+    throw new Error(
+      "The local Outlook connection is invalid. Run npm run outlook:connect again.",
+    );
+  }
 }
 function saveOutlookConnection(refreshToken) {
   mkdirSync(dirname(outlookConnectionPath), { recursive: true });
-  writeFileSync(outlookConnectionPath, JSON.stringify({ sender: OUTLOOK_SENDER, refreshTokenProtected: protectedData("protect", refreshToken), connectedAt: new Date().toISOString() }, null, 2), { encoding: "utf8", mode: 0o600 });
+  writeFileSync(
+    outlookConnectionPath,
+    JSON.stringify(
+      {
+        sender: OUTLOOK_SENDER,
+        refreshTokenProtected: protectedData("protect", refreshToken),
+        connectedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+    { encoding: "utf8", mode: 0o600 },
+  );
 }
 async function graphJson(url, options = {}) {
-  const response = await fetch(url, { ...options, signal: AbortSignal.timeout(30_000) });
+  const response = await fetch(url, {
+    ...options,
+    signal: AbortSignal.timeout(30_000),
+  });
   const text = await response.text();
-  if (!response.ok) throw new Error(`Microsoft Graph returned ${response.status}${text ? `: ${text.slice(0, 300)}` : "."}`);
+  if (!response.ok)
+    throw new Error(
+      `Microsoft Graph returned ${response.status}${text ? `: ${text.slice(0, 300)}` : "."}`,
+    );
   return text ? JSON.parse(text) : {};
 }
 async function requestToken(params) {
-  const response = await fetch(TOKEN_ENDPOINT, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: MICROSOFT_CLIENT_ID, ...params }).toString(), signal: AbortSignal.timeout(30_000) });
+  const response = await fetch(TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: MICROSOFT_CLIENT_ID,
+      ...params,
+    }).toString(),
+    signal: AbortSignal.timeout(30_000),
+  });
   const payload = await response.json().catch(() => ({}));
   return { response, payload };
 }
 async function validateSender(accessToken) {
-  const user = await graphJson("https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName", { headers: { Authorization: `Bearer ${accessToken}` } });
-  const address = typeof user.mail === "string" && user.mail ? user.mail : typeof user.userPrincipalName === "string" ? user.userPrincipalName : "";
-  if (address.trim().toLowerCase() !== OUTLOOK_SENDER) throw new Error("Authorize the startcodex@outlook.com mailbox to send this digest.");
+  const user = await graphJson(
+    "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName",
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  const address =
+    typeof user.mail === "string" && user.mail
+      ? user.mail
+      : typeof user.userPrincipalName === "string"
+        ? user.userPrincipalName
+        : "";
+  if (address.trim().toLowerCase() !== OUTLOOK_SENDER)
+    throw new Error(
+      "Authorize the startcodex@outlook.com mailbox to send this digest.",
+    );
 }
 async function outlookAccessToken() {
   const connection = readOutlookConnection();
-  if (!connection) throw new Error("Outlook has not been connected. Run npm run outlook:connect once on this PC.");
-  const { response, payload } = await requestToken({ grant_type: "refresh_token", refresh_token: connection.refreshToken, scope: GRAPH_SCOPE });
-  if (!response.ok || typeof payload.access_token !== "string") throw new Error(payload.error_description || "Microsoft rejected the local Outlook connection. Run npm run outlook:connect again.");
-  if (typeof payload.refresh_token === "string") saveOutlookConnection(payload.refresh_token);
+  if (!connection)
+    throw new Error(
+      "Outlook has not been connected. Run npm run outlook:connect once on this PC.",
+    );
+  const { response, payload } = await requestToken({
+    grant_type: "refresh_token",
+    refresh_token: connection.refreshToken,
+    scope: GRAPH_SCOPE,
+  });
+  if (!response.ok || typeof payload.access_token !== "string")
+    throw new Error(
+      payload.error_description ||
+        "Microsoft rejected the local Outlook connection. Run npm run outlook:connect again.",
+    );
+  if (typeof payload.refresh_token === "string")
+    saveOutlookConnection(payload.refresh_token);
   return payload.access_token;
 }
 async function startOutlookConnect() {
-  const response = await fetch(DEVICE_CODE_ENDPOINT, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: MICROSOFT_CLIENT_ID, scope: GRAPH_SCOPE }).toString(), signal: AbortSignal.timeout(30_000) });
+  const response = await fetch(DEVICE_CODE_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: MICROSOFT_CLIENT_ID,
+      scope: GRAPH_SCOPE,
+    }).toString(),
+    signal: AbortSignal.timeout(30_000),
+  });
   const authorization = await response.json().catch(() => ({}));
-  if (!response.ok || typeof authorization.device_code !== "string" || typeof authorization.user_code !== "string" || typeof authorization.verification_uri !== "string") throw new Error("Microsoft could not start Outlook authorization.");
-  console.log(`Open ${authorization.verification_uri} and enter code ${authorization.user_code}. Sign in as ${OUTLOOK_SENDER}.`);
+  if (
+    !response.ok ||
+    typeof authorization.device_code !== "string" ||
+    typeof authorization.user_code !== "string" ||
+    typeof authorization.verification_uri !== "string"
+  )
+    throw new Error("Microsoft could not start Outlook authorization.");
+  console.log(
+    `Open ${authorization.verification_uri} and enter code ${authorization.user_code}. Sign in as ${OUTLOOK_SENDER}.`,
+  );
   mkdirSync(dirname(outlookPendingPath), { recursive: true });
-  writeFileSync(outlookPendingPath, JSON.stringify({ deviceCodeProtected: protectedData("protect", authorization.device_code), expiresAt: Date.now() + Math.max(1, Number(authorization.expires_in) || 900) * 1000 }, null, 2), { encoding: "utf8", mode: 0o600 });
+  writeFileSync(
+    outlookPendingPath,
+    JSON.stringify(
+      {
+        deviceCodeProtected: protectedData(
+          "protect",
+          authorization.device_code,
+        ),
+        expiresAt:
+          Date.now() +
+          Math.max(1, Number(authorization.expires_in) || 900) * 1000,
+      },
+      null,
+      2,
+    ),
+    { encoding: "utf8", mode: 0o600 },
+  );
 }
 async function completeOutlookConnect() {
-  if (!existsSync(outlookPendingPath)) throw new Error("No Outlook approval is pending. Run npm run outlook:start first.");
+  if (!existsSync(outlookPendingPath))
+    throw new Error(
+      "No Outlook approval is pending. Run npm run outlook:start first.",
+    );
   const pending = JSON.parse(readFileSync(outlookPendingPath, "utf8"));
-  if (!pending?.deviceCodeProtected || !Number.isFinite(pending.expiresAt) || pending.expiresAt <= Date.now()) { unlinkSync(outlookPendingPath); throw new Error("The Microsoft authorization code expired. Run npm run outlook:start again."); }
-  const token = await requestToken({ grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: protectedData("unprotect", pending.deviceCodeProtected) });
-  if (token.payload.error === "authorization_pending" || token.payload.error === "slow_down") { console.log("Microsoft authorization is still pending."); return; }
-  if (!token.response.ok || typeof token.payload.access_token !== "string" || typeof token.payload.refresh_token !== "string") throw new Error(token.payload.error_description || "Microsoft did not authorize the Outlook connection.");
+  if (
+    !pending?.deviceCodeProtected ||
+    !Number.isFinite(pending.expiresAt) ||
+    pending.expiresAt <= Date.now()
+  ) {
+    unlinkSync(outlookPendingPath);
+    throw new Error(
+      "The Microsoft authorization code expired. Run npm run outlook:start again.",
+    );
+  }
+  const token = await requestToken({
+    grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+    device_code: protectedData("unprotect", pending.deviceCodeProtected),
+  });
+  if (
+    token.payload.error === "authorization_pending" ||
+    token.payload.error === "slow_down"
+  ) {
+    console.log("Microsoft authorization is still pending.");
+    return;
+  }
+  if (
+    !token.response.ok ||
+    typeof token.payload.access_token !== "string" ||
+    typeof token.payload.refresh_token !== "string"
+  )
+    throw new Error(
+      token.payload.error_description ||
+        "Microsoft did not authorize the Outlook connection.",
+    );
   await validateSender(token.payload.access_token);
   saveOutlookConnection(token.payload.refresh_token);
   unlinkSync(outlookPendingPath);
   console.log(`Outlook connected for ${OUTLOOK_SENDER}.`);
 }
-function openDb() { mkdirSync(dirname(dbPath), { recursive: true }); const db = new DatabaseSync(dbPath); db.exec(`CREATE TABLE IF NOT EXISTS subscribers (email TEXT PRIMARY KEY, zip_code TEXT NOT NULL, bank_selections TEXT NOT NULL, treasury_selections TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS email_delivery_log (delivery_key TEXT PRIMARY KEY, delivered_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS daily_digest_runs (run_date TEXT PRIMARY KEY, status TEXT NOT NULL, subscriber_count INTEGER NOT NULL DEFAULT 0, sent_count INTEGER NOT NULL DEFAULT 0, failed_count INTEGER NOT NULL DEFAULT 0, error_code TEXT, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS bank_rate_observations (bank TEXT NOT NULL, zip_code TEXT NOT NULL, term_months INTEGER NOT NULL, term TEXT NOT NULL, apy REAL NOT NULL, observed_on TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY (bank, zip_code, term_months, observed_on));`); return db; }
-function eastern(date = new Date()) { const part = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date).reduce((a, p) => ({ ...a, [p.type]: p.value }), {}); return { date: `${part.year}-${part.month}-${part.day}`, weekday: part.weekday }; }
-function validEmail(value) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value); }
-function selections(value, allowed) { try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string" && allowed.has(item)) : []; } catch { return []; } }
-function html(value) { return value.replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]); }
-function term(value) { const m = String(value).match(/(\d{1,2}(?:\.5)?)\s*(month|mo|year|yr)/i); if (!m) return null; const amount = Number(m[1]); const months = /year|yr/i.test(m[2]) ? Math.round(amount * 12) : Math.round(amount); return months >= 1 && months <= 120 ? { months, term: `${amount} ${months === 1 ? "Month" : /year|yr/i.test(m[2]) ? "Years" : "Months"}` } : null; }
-function genericRates(text) { const cleaned = text.replace(/<(script|style|svg|noscript)[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " "); const found = new Map(); for (const m of cleaned.matchAll(/(\d{1,2}(?:\.5)?\s*(?:month|mo|year|yr)s?).{0,140}?(\d(?:\.\d{1,3})?)\s*%(?:\s*(?:APY|annual percentage yield))?/gi)) { if (!/\b(cd|certificate)\b/i.test(m[0])) continue; const t = term(m[1]); const apy = Number(m[2]); if (t && apy >= 0 && apy <= 20) found.set(`${t.months}-${apy}`, { ...t, apy }); } return [...found.values()].sort((a,b) => a.months - b.months || a.apy - b.apy).slice(0, 15); }
-async function boundedText(url, options = {}) { const response = await fetch(url, { ...options, signal: AbortSignal.timeout(25_000) }); if (!response.ok) throw new Error(`source returned ${response.status}`); const text = await response.text(); if (text.length > 1_500_000) throw new Error("source response is too large"); return text; }
-async function chase(zip) { const response = await fetch("https://www.chase.com/bin/services/cdRate", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json", Referer: "https://www.chase.com/digital/disclosures-and-interest-rates-personal" }, body: new URLSearchParams({ zipcode: zip, type: "CD", language: "en" }), signal: AbortSignal.timeout(25_000) }); if (!response.ok) throw new Error(`Chase returned ${response.status}`); const data = await response.json(); const found = new Map(); for (const [label, values] of Object.entries(data?.ratesData?.rates ?? {})) { const months = Number(String(label).match(/^(\d+)-Month$/i)?.[1]); if (chaseReportedTerms.has(months)) { const apys = Array.isArray(values) ? values.map((v) => Number(String(v).match(/\d+(?:\.\d+)?/)?.[0])).filter(Number.isFinite) : []; if (apys.length) found.set(months, { months, term: `${months} ${months === 1 ? "Month" : "Months"}`, apy: Math.max(...apys) }); } } return [...found.values()].sort((a,b) => a.months-b.months); }
-async function firstAmerican() { const source = "https://www.firstambank.com/Personal/Explore/Rates/Deposit-Rates"; const text = await boundedText(`https://r.jina.ai/http://${source.replace(/^https?:\/\//, "")}`, { headers: { Accept: "text/plain" } }); const section = text.match(/Certificates of Deposit[\s\S]*?(?:Get Started|$)/i)?.[0] ?? text; const found = new Map(); for (const m of section.matchAll(/\|\s*(\d{1,2}(?:\.5)?\s*(?:month|mo|year|yr)s?)\s*\|\s*\d+(?:\.\d+)?%\s*\|\s*(\d+(?:\.\d+)?)%/gi)) { const t = term(m[1]); if (t) found.set(t.months, { ...t, apy: Number(m[2]) }); } const addSpecial = (months, apy) => { if (Number.isInteger(months) && Number.isFinite(apy) && apy >= 0 && apy <= 20) found.set(months, { months, term: `${months} ${months === 1 ? "Month" : "Months"}`, apy }); }; for (const m of text.matchAll(/(\d{1,2})\s*[- ]?Month\s+CD\s+Special[\s\S]{0,80}?(\d+(?:\.\d+)?)%\s*APY/gi)) addSpecial(Number(m[1]), Number(m[2])); for (const m of text.matchAll(/(\d+(?:\.\d+)?)%\s*APY\s*(\d{1,2})\s*[- ]?Month\s+CD\s+Special/gi)) addSpecial(Number(m[2]), Number(m[1])); return [...found.values()].sort((a,b) => a.months-b.months); }
-function edgePath() { return [process.env.RATE_COLLECTOR_EDGE_PATH, "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"].find((path) => path && existsSync(path)); }
+function openDb() {
+  mkdirSync(dirname(dbPath), { recursive: true });
+  const db = new DatabaseSync(dbPath);
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS subscribers (email TEXT PRIMARY KEY, zip_code TEXT NOT NULL, bank_selections TEXT NOT NULL, treasury_selections TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS email_delivery_log (delivery_key TEXT PRIMARY KEY, delivered_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS daily_digest_runs (run_date TEXT PRIMARY KEY, status TEXT NOT NULL, subscriber_count INTEGER NOT NULL DEFAULT 0, sent_count INTEGER NOT NULL DEFAULT 0, failed_count INTEGER NOT NULL DEFAULT 0, error_code TEXT, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS bank_rate_observations (bank TEXT NOT NULL, zip_code TEXT NOT NULL, term_months INTEGER NOT NULL, term TEXT NOT NULL, apy REAL NOT NULL, observed_on TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY (bank, zip_code, term_months, observed_on));`,
+  );
+  return db;
+}
+function eastern(date = new Date()) {
+  const part = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
+    .formatToParts(date)
+    .reduce((a, p) => ({ ...a, [p.type]: p.value }), {});
+  return {
+    date: `${part.year}-${part.month}-${part.day}`,
+    weekday: part.weekday,
+  };
+}
+function validEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+function selections(value, allowed) {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => typeof item === "string" && allowed.has(item))
+      : [];
+  } catch {
+    return [];
+  }
+}
+function html(value) {
+  return value.replace(
+    /[&<>'"]/g,
+    (char) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[
+        char
+      ],
+  );
+}
+function term(value) {
+  const m = String(value).match(/(\d{1,2}(?:\.5)?)\s*(month|mo|year|yr)/i);
+  if (!m) return null;
+  const amount = Number(m[1]);
+  const months = /year|yr/i.test(m[2])
+    ? Math.round(amount * 12)
+    : Math.round(amount);
+  return months >= 1 && months <= 120
+    ? {
+        months,
+        term: `${amount} ${months === 1 ? "Month" : /year|yr/i.test(m[2]) ? "Years" : "Months"}`,
+      }
+    : null;
+}
+function genericRates(text) {
+  const cleaned = text
+    .replace(/<(script|style|svg|noscript)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ");
+  const found = new Map();
+  for (const m of cleaned.matchAll(
+    /(\d{1,2}(?:\.5)?\s*(?:month|mo|year|yr)s?).{0,140}?(\d(?:\.\d{1,3})?)\s*%(?:\s*(?:APY|annual percentage yield))?/gi,
+  )) {
+    if (!/\b(cd|certificate)\b/i.test(m[0])) continue;
+    const t = term(m[1]);
+    const apy = Number(m[2]);
+    if (t && apy >= 0 && apy <= 20)
+      found.set(`${t.months}-${apy}`, { ...t, apy });
+  }
+  return [...found.values()]
+    .sort((a, b) => a.months - b.months || a.apy - b.apy)
+    .slice(0, 15);
+}
+async function boundedText(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    signal: AbortSignal.timeout(25_000),
+  });
+  if (!response.ok) throw new Error(`source returned ${response.status}`);
+  const text = await response.text();
+  if (text.length > 1_500_000) throw new Error("source response is too large");
+  return text;
+}
+async function chase(zip) {
+  const response = await fetch("https://www.chase.com/bin/services/cdRate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+      Referer:
+        "https://www.chase.com/digital/disclosures-and-interest-rates-personal",
+    },
+    body: new URLSearchParams({ zipcode: zip, type: "CD", language: "en" }),
+    signal: AbortSignal.timeout(25_000),
+  });
+  if (!response.ok) throw new Error(`Chase returned ${response.status}`);
+  const data = await response.json();
+  const found = new Map();
+  for (const [label, values] of Object.entries(data?.ratesData?.rates ?? {})) {
+    const months = Number(String(label).match(/^(\d+)-Month$/i)?.[1]);
+    if (chaseReportedTerms.has(months)) {
+      const apys = Array.isArray(values)
+        ? values
+            .map((v) => Number(String(v).match(/\d+(?:\.\d+)?/)?.[0]))
+            .filter(Number.isFinite)
+        : [];
+      if (apys.length)
+        found.set(months, {
+          months,
+          term: `${months} ${months === 1 ? "Month" : "Months"}`,
+          apy: Math.max(...apys),
+        });
+    }
+  }
+  return [...found.values()].sort((a, b) => a.months - b.months);
+}
+async function firstAmerican() {
+  const source =
+    "https://www.firstambank.com/Personal/Explore/Rates/Deposit-Rates";
+  const text = await boundedText(
+    `https://r.jina.ai/http://${source.replace(/^https?:\/\//, "")}`,
+    { headers: { Accept: "text/plain" } },
+  );
+  const section =
+    text.match(/Certificates of Deposit[\s\S]*?(?:Get Started|$)/i)?.[0] ??
+    text;
+  const found = new Map();
+  for (const m of section.matchAll(
+    /\|\s*(\d{1,2}(?:\.5)?\s*(?:month|mo|year|yr)s?)\s*\|\s*\d+(?:\.\d+)?%\s*\|\s*(\d+(?:\.\d+)?)%/gi,
+  )) {
+    const t = term(m[1]);
+    if (t) found.set(t.months, { ...t, apy: Number(m[2]) });
+  }
+  const addSpecial = (months, apy) => {
+    if (
+      Number.isInteger(months) &&
+      Number.isFinite(apy) &&
+      apy >= 0 &&
+      apy <= 20
+    )
+      found.set(months, {
+        months,
+        term: `${months} ${months === 1 ? "Month" : "Months"}`,
+        apy,
+      });
+  };
+  for (const m of text.matchAll(
+    /(\d{1,2})\s*[- ]?Month\s+CD\s+Special[\s\S]{0,80}?(\d+(?:\.\d+)?)%\s*APY/gi,
+  ))
+    addSpecial(Number(m[1]), Number(m[2]));
+  for (const m of text.matchAll(
+    /(\d+(?:\.\d+)?)%\s*APY\s*(\d{1,2})\s*[- ]?Month\s+CD\s+Special/gi,
+  ))
+    addSpecial(Number(m[2]), Number(m[1]));
+  return [...found.values()].sort((a, b) => a.months - b.months);
+}
+function edgePath() {
+  return [
+    process.env.RATE_COLLECTOR_EDGE_PATH,
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+  ].find((path) => path && existsSync(path));
+}
 function fifthThirdPromoRates(text) {
   // Only report the public Featured CD promos.  The Standard section contains
   // balance-tiered rates, which are intentionally excluded from the digest.
-  const featured = text.match(/Featured CD Interest Rates and APY([\s\S]*?)Standard CD Interest Rates/i)?.[1] ?? "";
+  const featured =
+    text.match(
+      /Featured CD Interest Rates and APY([\s\S]*?)Standard CD Interest Rates/i,
+    )?.[1] ?? "";
   const found = new Map();
-  for (const match of featured.matchAll(/(\d{1,2})\s*Month\s+CD\s+Promo\b[\s\S]{0,100}?(\d+(?:\.\d+)?)%\s+(\d+(?:\.\d+)?)%/gi)) {
+  for (const match of featured.matchAll(
+    /(\d{1,2})\s*Month\s+CD\s+Promo\b[\s\S]{0,100}?(\d+(?:\.\d+)?)%\s+(\d+(?:\.\d+)?)%/gi,
+  )) {
     const months = Number(match[1]);
     const apy = Number(match[3]); // Fifth Third lists interest rate first, then APY.
-    if (Number.isInteger(months) && months >= 1 && months <= 120 && Number.isFinite(apy) && apy >= 0 && apy <= 20) {
-      found.set(months, { months, term: `${months} ${months === 1 ? "Month" : "Months"}`, apy });
+    if (
+      Number.isInteger(months) &&
+      months >= 1 &&
+      months <= 120 &&
+      Number.isFinite(apy) &&
+      apy >= 0 &&
+      apy <= 20
+    ) {
+      found.set(months, {
+        months,
+        term: `${months} ${months === 1 ? "Month" : "Months"}`,
+        apy,
+      });
     }
   }
   return [...found.values()].sort((a, b) => a.months - b.months);
 }
 async function fifthThird(zip) {
   const executablePath = edgePath();
-  if (!executablePath) throw new Error("Microsoft Edge is required for Fifth Third retrieval.");
+  if (!executablePath)
+    throw new Error("Microsoft Edge is required for Fifth Third retrieval.");
   const browser = await chromium.launch({ executablePath, headless: true });
   let context;
   try {
-    context = await browser.newContext({ locale: "en-US", timezoneId: "America/New_York", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0 Safari/537.36" });
+    context = await browser.newContext({
+      locale: "en-US",
+      timezoneId: "America/New_York",
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0 Safari/537.36",
+    });
     const page = await context.newPage();
-    await page.goto("https://openonline.53.com/apps/oc/rates.html?productType=cd", { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await page.goto(
+      "https://openonline.53.com/apps/oc/rates.html?productType=cd",
+      { waitUntil: "domcontentloaded", timeout: 30_000 },
+    );
     const initialText = await page.locator("body").innerText();
-    if (/oops, something went wrong|page you're trying to access doesn't appear to exist|ip address:/i.test(initialText)) throw new Error("Fifth Third rejected this computer's network before its public ZIP form loaded.");
+    if (
+      /oops, something went wrong|page you're trying to access doesn't appear to exist|ip address:/i.test(
+        initialText,
+      )
+    )
+      throw new Error(
+        "Fifth Third rejected this computer's network before its public ZIP form loaded.",
+      );
     const input = page.locator("#enter-zip");
-    await input.waitFor({ state: "visible", timeout: 15_000 }).catch(() => { throw new Error("Fifth Third did not display its public ZIP form."); });
+    await input.waitFor({ state: "visible", timeout: 15_000 }).catch(() => {
+      throw new Error("Fifth Third did not display its public ZIP form.");
+    });
     await input.fill(zip);
-    await page.locator("form.zip-form button, button:has-text('ENTER')").first().click();
-    await page.waitForFunction((zipCode) => {
-      const text = document.body?.innerText ?? "";
-      return text.includes(zipCode) && /Featured CD Interest Rates and APY/i.test(text) && /\b\d+\s*Month\s+CD\s+Promo/i.test(text);
-    }, zip, { timeout: 25_000 });
+    await page
+      .locator("form.zip-form button, button:has-text('ENTER')")
+      .first()
+      .click();
+    await page.waitForFunction(
+      (zipCode) => {
+        const text = document.body?.innerText ?? "";
+        return (
+          text.includes(zipCode) &&
+          /Featured CD Interest Rates and APY/i.test(text) &&
+          /\b\d+\s*Month\s+CD\s+Promo/i.test(text)
+        );
+      },
+      zip,
+      { timeout: 25_000 },
+    );
     const text = await page.locator("body").innerText();
-    if (/captcha|verify you are human|unusual traffic|access denied/i.test(text)) throw new Error("Fifth Third presented an access-control page.");
-    if (!text.includes(zip)) throw new Error("Fifth Third did not confirm the requested ZIP.");
+    if (
+      /captcha|verify you are human|unusual traffic|access denied/i.test(text)
+    )
+      throw new Error("Fifth Third presented an access-control page.");
+    if (!text.includes(zip))
+      throw new Error("Fifth Third did not confirm the requested ZIP.");
     const found = fifthThirdPromoRates(text);
-    if (!found.length) throw new Error("Fifth Third returned no promotional CD APYs.");
+    if (!found.length)
+      throw new Error("Fifth Third returned no promotional CD APYs.");
     return found;
-  } finally { await context?.close(); await browser.close(); }
+  } finally {
+    await context?.close();
+    await browser.close();
+  }
 }
-const sourceUrls = { "Bank of America": "https://www.bankofamerica.com/deposits/bank-cds/cd-accounts/", "Citizens Bank": "https://www.citizensbank.com/savings/cds-certificates-of-deposit/online-certificate-of-deposit.page", "Morgan Stanley": "https://www.morganstanley.com/what-we-do/wealth-management/cd-savings", PNC: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html", "Synchrony Bank": "https://www.synchronybank.com/banking/cd-rates/", "TD Bank": "https://www.td.com/us/en/personal-banking/certificates-of-deposit", Truist: "https://www.truist.com/savings/certificate-of-deposit", "U.S. Bank": "https://www.usbank.com/bank-accounts/savings-accounts/certificate-of-deposit.html", "Wells Fargo": "https://www.wellsfargo.com/savings-cds/rates/" };
-async function rates(bank, zip) { if (bank === "Chase") return { rates: await chase(zip), source: "official Chase rate feed" }; if (bank === "First American Bank") return { rates: await firstAmerican(), source: "First American public rate page" }; if (bank === "Fifth Third") return { rates: await fifthThird(zip), source: "Fifth Third public ZIP rate page" }; const url = sourceUrls[bank]; if (!url) throw new Error("Unsupported bank selection."); return { rates: genericRates(await boundedText(url, { headers: { "User-Agent": "Mozilla/5.0" } })), source: url }; }
-async function treasury() { const year = eastern().date.slice(0, 4); const xml = await boundedText(`https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value=${year}`); const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)]; const entry = entries.at(-1)?.[1]; if (!entry) throw new Error("Treasury did not return an official yield-curve close."); const fields = { "3 Mo": "BC_3MONTH", "6 Mo": "BC_6MONTH", "1 Yr": "BC_1YEAR", "2 Yr": "BC_2YEAR", "5 Yr": "BC_5YEAR", "10 Yr": "BC_10YEAR", "30 Yr": "BC_30YEAR" }; const yields = Object.fromEntries(Object.entries(fields).map(([label, field]) => [label, Number(entry.match(new RegExp(`<d:${field}[^>]*>([^<]+)`, "i"))?.[1])]).filter(([,value]) => Number.isFinite(value))); if (!Object.keys(yields).length) throw new Error("Treasury did not return usable par yields."); return yields; }
-function message(subscriber, treasuryYields, quoteMap) { const date = eastern().date; const treasuryRows = subscriber.treasuries.map((label) => `${label}: ${treasuryYields[label]?.toFixed(2) ?? "Unavailable"}%`).join(" · "); const bankRows = subscriber.banks.map((bank) => { const quote = quoteMap.get(bank); return { bank, value: quote?.rates?.length ? quote.rates.map((r) => `${r.term}: ${r.apy.toFixed(2)}%`).join(" · ") : `Unavailable — ${quote?.error ?? "No current public quote was returned."}`, source: quote?.source }; }); const unsubscribe = `mailto:${encodeURIComponent(process.env.ADMIN_EMAIL || "unsubscribe@example.com")}?subject=${encodeURIComponent(`Unsubscribe ${subscriber.email}`)}`; const banksHtml = bankRows.map((row) => `<tr><td style="padding:12px 8px;border-bottom:1px solid #d9e0e8;font-weight:700;vertical-align:top">${html(row.bank)}${row.source ? `<br><small style="font-weight:400"><a href="${html(row.source)}">Official source</a></small>` : ""}</td><td style="padding:12px 8px;border-bottom:1px solid #d9e0e8;vertical-align:top">${html(row.value)}</td></tr>`).join(""); const subject = `The Daily Yield rate note — ${date}`; return { subject, html: `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#172033;max-width:760px;margin:auto;padding:0 16px"><h1 style="font-size:22px">The Daily Yield rate note</h1><p>Prepared ${date} for ZIP <strong>${html(subscriber.zipCode)}</strong>.</p>${subscriber.treasuries.length ? `<h2>Treasury par yields</h2><p>${html(treasuryRows)}</p>` : ""}<h2>Bank CD offers</h2><table style="border-collapse:collapse;width:100%"><thead><tr><th style="text-align:left;padding:8px">Bank</th><th style="text-align:left;padding:8px">Term / APY</th></tr></thead><tbody>${banksHtml}</tbody></table><p style="color:#5f6b7a;font-size:12px">Automated weekday update. Confirm current terms and disclosures with the issuing bank before acting.</p><p><a href="${unsubscribe}" style="display:inline-block;border:1px solid #aeb8c4;border-radius:4px;padding:8px 12px;color:#334155;font-size:12px;text-decoration:none">Unsubscribe</a></p></body></html>`, text: [subject, `Prepared for ZIP ${subscriber.zipCode}.`, treasuryRows, ...bankRows.map((row) => `${row.bank}: ${row.value}`), `Unsubscribe: ${unsubscribe}`].filter(Boolean).join("\n\n") }; }
-async function send(email, mail) { const accessToken = await outlookAccessToken(); const response = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ message: { subject: mail.subject, body: { contentType: "HTML", content: mail.html }, toRecipients: [{ emailAddress: { address: email } }] }, saveToSentItems: true }), signal: AbortSignal.timeout(30_000) }); if (!response.ok) throw new Error(`Microsoft Graph sendMail failed with status ${response.status}.`); }
-async function run(dry = false) { const now = eastern(); if (!["Mon", "Tue", "Wed", "Thu", "Fri"].includes(now.weekday)) { console.log("Weekend: no email sent."); return; } const db = openDb(); const subscribers = db.prepare("SELECT email, zip_code, bank_selections, treasury_selections FROM subscribers").all().map((row) => ({ email: row.email, zipCode: row.zip_code, banks: selections(row.bank_selections, banks), treasuries: selections(row.treasury_selections, treasuryTerms) })); const treasuryYields = await treasury(); const cache = new Map(); let sent = 0; let failed = 0; for (const subscriber of subscribers) { const key = `${now.date}:${subscriber.email}`; if (!dry && db.prepare("SELECT 1 FROM email_delivery_log WHERE delivery_key = ?").get(key)) continue; const quotes = new Map(); for (const bank of subscriber.banks) { const cacheKey = `${bank}:${subscriber.zipCode}`; if (!cache.has(cacheKey)) cache.set(cacheKey, rates(bank, subscriber.zipCode).catch((error) => ({ rates: [], error: error instanceof Error ? error.message : "Rate retrieval failed." }))); const quote = await cache.get(cacheKey); quotes.set(bank, quote); for (const rate of quote.rates ?? []) db.prepare("INSERT OR REPLACE INTO bank_rate_observations (bank, zip_code, term_months, term, apy, observed_on, source) VALUES (?, ?, ?, ?, ?, ?, ?)").run(bank, subscriber.zipCode, rate.months, rate.term, rate.apy, now.date, quote.source ?? "public source"); if (bank === "Chase") db.prepare("DELETE FROM bank_rate_observations WHERE bank = ? AND zip_code = ? AND observed_on = ? AND term_months NOT IN (3, 4, 6, 7, 9, 10, 11, 12, 15, 18)").run(bank, subscriber.zipCode, now.date); } const mail = message(subscriber, treasuryYields, quotes); try { if (dry) console.log(`Would send ${subscriber.email}: ${mail.subject}`); else { await send(subscriber.email, mail); db.prepare("INSERT INTO email_delivery_log (delivery_key, delivered_at) VALUES (?, ?)").run(key, new Date().toISOString()); } sent += 1; } catch (error) { failed += 1; console.error(`Delivery failed for ${subscriber.email}: ${error instanceof Error ? error.message : error}`); } } db.prepare("INSERT INTO daily_digest_runs (run_date, status, subscriber_count, sent_count, failed_count, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(run_date) DO UPDATE SET status=excluded.status, subscriber_count=excluded.subscriber_count, sent_count=excluded.sent_count, failed_count=excluded.failed_count, updated_at=excluded.updated_at").run(now.date, failed ? "degraded" : "success", subscribers.length, sent, failed, new Date().toISOString()); if (failed && process.env.ADMIN_EMAIL && !dry) await send(process.env.ADMIN_EMAIL, { subject: `The Daily Yield delivery alert — ${now.date}`, text: `${failed} subscriber delivery attempt(s) failed. See the local log.`, html: `<p>${failed} subscriber delivery attempt(s) failed. See the local log.</p>` }).catch(() => undefined); if (failed) process.exitCode = 1; console.log(`Completed ${now.date}: ${sent} sent, ${failed} failed.`); }
-function migrate() { const file = join(root, "data", "cloudflare-subscribers.json"); if (!existsSync(file)) throw new Error("Run npm run export:cloudflare first."); const data = JSON.parse(readFileSync(file, "utf8")); const db = openDb(); let imported = 0; for (const row of data.subscribers ?? []) if (validEmail(row.email) && /^\d{5}$/.test(row.zipCode)) { db.prepare("INSERT INTO subscribers (email, zip_code, bank_selections, treasury_selections) VALUES (?, ?, ?, ?) ON CONFLICT(email) DO UPDATE SET zip_code=excluded.zip_code, bank_selections=excluded.bank_selections, treasury_selections=excluded.treasury_selections").run(row.email.toLowerCase(), row.zipCode, row.bankSelections, row.treasurySelections); imported += 1; } console.log(`Imported ${imported} subscriber(s).`); }
-async function testOutlook() { await send(OUTLOOK_SENDER, { subject: "The Daily Yield — local delivery test", text: "This confirms the local The Daily Yield mailer can send from startcodex@outlook.com.", html: "<p>This confirms the local <strong>The Daily Yield</strong> mailer can send from startcodex@outlook.com.</p>" }); console.log("Local Outlook delivery test sent."); }
-const [command, value] = process.argv.slice(2); if (command === "--init") { openDb(); console.log(`Initialized ${dbPath}`); } else if (command === "--outlook-start") startOutlookConnect().catch((error) => { console.error(error.message); process.exitCode = 1; }); else if (command === "--outlook-complete") completeOutlookConnect().catch((error) => { console.error(error.message); process.exitCode = 1; }); else if (command === "--test-outlook") testOutlook().catch((error) => { console.error(error.message); process.exitCode = 1; }); else if (command === "--migrate") migrate(); else if (command === "--unsubscribe" && validEmail(value ?? "")) { const db = openDb(); db.prepare("DELETE FROM subscribers WHERE email = ?").run(value.toLowerCase()); console.log(`Unsubscribed ${value.toLowerCase()}.`); } else if (command === "--dry-run") run(true).catch((error) => { console.error(error.message); process.exitCode = 1; }); else if (command === "--run") run().catch((error) => { console.error(error.message); process.exitCode = 1; }); else console.log("Use --init, --outlook-start, --outlook-complete, --test-outlook, --migrate, --dry-run, --run, or --unsubscribe address@example.com.");
+const sourceUrls = {
+  "Bank of America":
+    "https://www.bankofamerica.com/deposits/bank-cds/cd-accounts/",
+  "Citizens Bank":
+    "https://www.citizensbank.com/savings/cds-certificates-of-deposit/online-certificate-of-deposit.page",
+  "Morgan Stanley":
+    "https://www.morganstanley.com/what-we-do/wealth-management/cd-savings",
+  PNC: "https://www.pnc.com/en/personal-banking/banking/savings/certificate-of-deposits.html",
+  "Synchrony Bank": "https://www.synchronybank.com/banking/cd-rates/",
+  "TD Bank":
+    "https://www.td.com/us/en/personal-banking/certificates-of-deposit",
+  Truist: "https://www.truist.com/savings/certificate-of-deposit",
+  "U.S. Bank":
+    "https://www.usbank.com/bank-accounts/savings-accounts/certificate-of-deposit.html",
+  "Wells Fargo": "https://www.wellsfargo.com/savings-cds/rates/",
+};
+async function rates(bank, zip) {
+  if (bank === "Chase")
+    return { rates: await chase(zip), source: "official Chase rate feed" };
+  if (bank === "First American Bank")
+    return {
+      rates: await firstAmerican(),
+      source: "First American public rate page",
+    };
+  if (bank === "Fifth Third")
+    return {
+      rates: await fifthThird(zip),
+      source: "Fifth Third public ZIP rate page",
+    };
+  const url = sourceUrls[bank];
+  if (!url) throw new Error("Unsupported bank selection.");
+  return {
+    rates: genericRates(
+      await boundedText(url, { headers: { "User-Agent": "Mozilla/5.0" } }),
+    ),
+    source: url,
+  };
+}
+async function treasury() {
+  const year = eastern().date.slice(0, 4);
+  const xml = await boundedText(
+    `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value=${year}`,
+  );
+  const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)];
+  const entry = entries.at(-1)?.[1];
+  if (!entry)
+    throw new Error("Treasury did not return an official yield-curve close.");
+  const fields = {
+    "3 Mo": "BC_3MONTH",
+    "6 Mo": "BC_6MONTH",
+    "1 Yr": "BC_1YEAR",
+    "2 Yr": "BC_2YEAR",
+    "5 Yr": "BC_5YEAR",
+    "10 Yr": "BC_10YEAR",
+    "30 Yr": "BC_30YEAR",
+  };
+  const yields = Object.fromEntries(
+    Object.entries(fields)
+      .map(([label, field]) => [
+        label,
+        Number(entry.match(new RegExp(`<d:${field}[^>]*>([^<]+)`, "i"))?.[1]),
+      ])
+      .filter(([, value]) => Number.isFinite(value)),
+  );
+  if (!Object.keys(yields).length)
+    throw new Error("Treasury did not return usable par yields.");
+  return yields;
+}
+function message(subscriber, treasuryYields, quoteMap) {
+  const date = eastern().date;
+  const treasuryRows = subscriber.treasuries
+    .map(
+      (label) =>
+        `${label}: ${treasuryYields[label]?.toFixed(2) ?? "Unavailable"}%`,
+    )
+    .join(" · ");
+  const bankRows = subscriber.banks.map((bank) => {
+    const quote = quoteMap.get(bank);
+    return {
+      bank,
+      value: quote?.rates?.length
+        ? quote.rates.map((r) => `${r.term}: ${r.apy.toFixed(2)}%`).join(" · ")
+        : `Unavailable — ${quote?.error ?? "No current public quote was returned."}`,
+      source: quote?.source,
+    };
+  });
+  const unsubscribe = `mailto:${encodeURIComponent(process.env.ADMIN_EMAIL || "unsubscribe@example.com")}?subject=${encodeURIComponent(`Unsubscribe ${subscriber.email}`)}`;
+  const banksHtml = bankRows
+    .map(
+      (row) =>
+        `<tr><td style="padding:12px 8px;border-bottom:1px solid #d9e0e8;font-weight:700;vertical-align:top">${html(row.bank)}${row.source ? `<br><small style="font-weight:400"><a href="${html(row.source)}">Official source</a></small>` : ""}</td><td style="padding:12px 8px;border-bottom:1px solid #d9e0e8;vertical-align:top">${html(row.value)}</td></tr>`,
+    )
+    .join("");
+  const subject = `The Daily Yield rate note — ${date}`;
+  return {
+    subject,
+    html: `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#172033;max-width:760px;margin:auto;padding:0 16px"><h1 style="font-size:22px">The Daily Yield rate note</h1><p>Prepared ${date} for ZIP <strong>${html(subscriber.zipCode)}</strong>.</p>${subscriber.treasuries.length ? `<h2>Treasury par yields</h2><p>${html(treasuryRows)}</p>` : ""}<h2>Bank CD offers</h2><table style="border-collapse:collapse;width:100%"><thead><tr><th style="text-align:left;padding:8px">Bank</th><th style="text-align:left;padding:8px">Term / APY</th></tr></thead><tbody>${banksHtml}</tbody></table><p style="color:#5f6b7a;font-size:12px">Automated weekday update. Confirm current terms and disclosures with the issuing bank before acting.</p><p><a href="${unsubscribe}" style="display:inline-block;border:1px solid #aeb8c4;border-radius:4px;padding:8px 12px;color:#334155;font-size:12px;text-decoration:none">Unsubscribe</a></p></body></html>`,
+    text: [
+      subject,
+      `Prepared for ZIP ${subscriber.zipCode}.`,
+      treasuryRows,
+      ...bankRows.map((row) => `${row.bank}: ${row.value}`),
+      `Unsubscribe: ${unsubscribe}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+  };
+}
+async function send(email, mail) {
+  const accessToken = await outlookAccessToken();
+  const response = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      message: {
+        subject: mail.subject,
+        body: { contentType: "HTML", content: mail.html },
+        toRecipients: [{ emailAddress: { address: email } }],
+      },
+      saveToSentItems: true,
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok)
+    throw new Error(
+      `Microsoft Graph sendMail failed with status ${response.status}.`,
+    );
+}
+async function run(dry = false) {
+  const now = eastern();
+  const db = openDb();
+  const subscribers = db
+    .prepare(
+      "SELECT email, zip_code, bank_selections, treasury_selections FROM subscribers",
+    )
+    .all()
+    .map((row) => ({
+      email: row.email,
+      zipCode: row.zip_code,
+      banks: selections(row.bank_selections, banks),
+      treasuries: selections(row.treasury_selections, treasuryTerms),
+    }));
+  const treasuryYields = await treasury();
+  const cache = new Map();
+  let sent = 0;
+  let failed = 0;
+  for (const subscriber of subscribers) {
+    const key = `${now.date}:${subscriber.email}`;
+    if (
+      !dry &&
+      db
+        .prepare("SELECT 1 FROM email_delivery_log WHERE delivery_key = ?")
+        .get(key)
+    )
+      continue;
+    const quotes = new Map();
+    for (const bank of subscriber.banks) {
+      const cacheKey = `${bank}:${subscriber.zipCode}`;
+      if (!cache.has(cacheKey))
+        cache.set(
+          cacheKey,
+          rates(bank, subscriber.zipCode).catch((error) => ({
+            rates: [],
+            error:
+              error instanceof Error ? error.message : "Rate retrieval failed.",
+          })),
+        );
+      const quote = await cache.get(cacheKey);
+      quotes.set(bank, quote);
+      for (const rate of quote.rates ?? [])
+        db.prepare(
+          "INSERT OR REPLACE INTO bank_rate_observations (bank, zip_code, term_months, term, apy, observed_on, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ).run(
+          bank,
+          subscriber.zipCode,
+          rate.months,
+          rate.term,
+          rate.apy,
+          now.date,
+          quote.source ?? "public source",
+        );
+      if (bank === "Chase")
+        db.prepare(
+          "DELETE FROM bank_rate_observations WHERE bank = ? AND zip_code = ? AND observed_on = ? AND term_months NOT IN (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 18)",
+        ).run(bank, subscriber.zipCode, now.date);
+    }
+    const mail = message(subscriber, treasuryYields, quotes);
+    try {
+      if (dry) console.log(`Would send ${subscriber.email}: ${mail.subject}`);
+      else {
+        await send(subscriber.email, mail);
+        db.prepare(
+          "INSERT INTO email_delivery_log (delivery_key, delivered_at) VALUES (?, ?)",
+        ).run(key, new Date().toISOString());
+      }
+      sent += 1;
+    } catch (error) {
+      failed += 1;
+      console.error(
+        `Delivery failed for ${subscriber.email}: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+  }
+  db.prepare(
+    "INSERT INTO daily_digest_runs (run_date, status, subscriber_count, sent_count, failed_count, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(run_date) DO UPDATE SET status=excluded.status, subscriber_count=excluded.subscriber_count, sent_count=excluded.sent_count, failed_count=excluded.failed_count, updated_at=excluded.updated_at",
+  ).run(
+    now.date,
+    failed ? "degraded" : "success",
+    subscribers.length,
+    sent,
+    failed,
+    new Date().toISOString(),
+  );
+  if (failed && process.env.ADMIN_EMAIL && !dry)
+    await send(process.env.ADMIN_EMAIL, {
+      subject: `The Daily Yield delivery alert — ${now.date}`,
+      text: `${failed} subscriber delivery attempt(s) failed. See the local log.`,
+      html: `<p>${failed} subscriber delivery attempt(s) failed. See the local log.</p>`,
+    }).catch(() => undefined);
+  if (failed) process.exitCode = 1;
+  console.log(`Completed ${now.date}: ${sent} sent, ${failed} failed.`);
+}
+function migrate() {
+  const file = join(root, "data", "cloudflare-subscribers.json");
+  if (!existsSync(file))
+    throw new Error("Run npm run export:cloudflare first.");
+  const data = JSON.parse(readFileSync(file, "utf8"));
+  const db = openDb();
+  let imported = 0;
+  for (const row of data.subscribers ?? [])
+    if (validEmail(row.email) && /^\d{5}$/.test(row.zipCode)) {
+      db.prepare(
+        "INSERT INTO subscribers (email, zip_code, bank_selections, treasury_selections) VALUES (?, ?, ?, ?) ON CONFLICT(email) DO UPDATE SET zip_code=excluded.zip_code, bank_selections=excluded.bank_selections, treasury_selections=excluded.treasury_selections",
+      ).run(
+        row.email.toLowerCase(),
+        row.zipCode,
+        row.bankSelections,
+        row.treasurySelections,
+      );
+      imported += 1;
+    }
+  console.log(`Imported ${imported} subscriber(s).`);
+}
+async function testOutlook() {
+  await send(OUTLOOK_SENDER, {
+    subject: "The Daily Yield — local delivery test",
+    text: "This confirms the local The Daily Yield mailer can send from startcodex@outlook.com.",
+    html: "<p>This confirms the local <strong>The Daily Yield</strong> mailer can send from startcodex@outlook.com.</p>",
+  });
+  console.log("Local Outlook delivery test sent.");
+}
+const [command, value] = process.argv.slice(2);
+if (command === "--init") {
+  openDb();
+  console.log(`Initialized ${dbPath}`);
+} else if (command === "--outlook-start")
+  startOutlookConnect().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+else if (command === "--outlook-complete")
+  completeOutlookConnect().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+else if (command === "--test-outlook")
+  testOutlook().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+else if (command === "--migrate") migrate();
+else if (command === "--unsubscribe" && validEmail(value ?? "")) {
+  const db = openDb();
+  db.prepare("DELETE FROM subscribers WHERE email = ?").run(
+    value.toLowerCase(),
+  );
+  console.log(`Unsubscribed ${value.toLowerCase()}.`);
+} else if (command === "--dry-run")
+  run(true).catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+else if (command === "--run")
+  run().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+else
+  console.log(
+    "Use --init, --outlook-start, --outlook-complete, --test-outlook, --migrate, --dry-run, --run, or --unsubscribe address@example.com.",
+  );
