@@ -17,7 +17,15 @@ export async function sendResend(email, mail, options = {}) {
   const response = await (options.fetch ?? fetch)("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${options.apiKey ?? apiKey()}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: RESEND_SENDER, to: [email], subject: mail.subject, html: mail.html, text: mail.text }),
+    body: JSON.stringify({
+      from: RESEND_SENDER,
+      to: [email],
+      reply_to: options.replyTo ?? process.env.ADMIN_EMAIL ?? "startcodex@outlook.com",
+      subject: mail.subject,
+      html: mail.html,
+      text: mail.text,
+      ...(mail.unsubscribe ? { headers: { "List-Unsubscribe": `<${mail.unsubscribe}>` } } : {}),
+    }),
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`Resend send failed with status ${response.status}.`);
