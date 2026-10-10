@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { sendResend } from "./resend-mail.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 loadEnv(join(root, ".env"));
@@ -634,27 +635,7 @@ function message(subscriber, treasuryYields, quoteMap) {
   };
 }
 async function send(email, mail) {
-  const accessToken = await outlookAccessToken();
-  const response = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      message: {
-        subject: mail.subject,
-        body: { contentType: "HTML", content: mail.html },
-        toRecipients: [{ emailAddress: { address: email } }],
-      },
-      saveToSentItems: true,
-    }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok)
-    throw new Error(
-      `Microsoft Graph sendMail failed with status ${response.status}.`,
-    );
+  return sendResend(email, mail);
 }
 async function run(dry = false) {
   const now = eastern();
