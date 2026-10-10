@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { sendResend } from "./resend-mail.mjs";
+import { unsubscribeLink, unsubscribeStatus, syncUnsubscribes } from "./unsubscribe-client.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 loadEnv(join(root, ".env"));
@@ -612,7 +613,7 @@ function message(subscriber, treasuryYields, quoteMap) {
       source: quote?.source,
     };
   });
-  const unsubscribe = `mailto:${encodeURIComponent(process.env.ADMIN_EMAIL || "unsubscribe@example.com")}?subject=${encodeURIComponent(`Unsubscribe ${subscriber.email}`)}`;
+  const unsubscribe = unsubscribeLink(subscriber.email);
   const banksHtml = bankRows
     .map(
       (row) =>
@@ -636,11 +637,16 @@ function message(subscriber, treasuryYields, quoteMap) {
   };
 }
 async function send(email, mail) {
+  if (mail.unsubscribe && (await unsubscribeStatus([email])).length) {
+    openDb().prepare("DELETE FROM subscribers WHERE email = ?").run(email);
+    throw new Error("Subscriber opted out. Delivery stopped.");
+  }
   return sendResend(email, mail);
 }
 async function run(dry = false) {
   const now = eastern();
   const db = openDb();
+  await syncUnsubscribes(db);
   const subscribers = db
     .prepare(
       "SELECT email, zip_code, bank_selections, treasury_selections FROM subscribers",

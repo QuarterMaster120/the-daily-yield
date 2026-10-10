@@ -19,4 +19,10 @@ The migration preserves existing email addresses, ZIP codes, bank selections, an
 
 `node daily-yield-mailer.mjs --unsubscribe address@example.com`
 
-Email unsubscribe links use a `mailto:` request because there is intentionally no public web service in this version.
+Emails now contain signed HTTPS unsubscribe links and RFC 8058 one-click headers. The public endpoint is https://daily-yield-unsubscribe.startcodex.workers.dev. GET renders a confirmation page without changing subscriptions; POST immediately persists an opt-out in Cloudflare D1. Only opaque subscriber IDs and timestamps are stored remotely, not email addresses.
+
+Before each run, the local mailer checks the public opt-out store and removes matching subscribers from SQLite. It checks again immediately before each digest send. If the status service cannot be reached or returns an invalid response, delivery stops. Public opt-outs are immediate; the local SQLite copy is removed on the next successful check. The endpoint does not resume or schedule the mailer.
+
+Deployment: run `node deploy-unsubscribe.mjs` from this directory. Deployment reads `CLOUDFLARE_API_TOKEN` from the private secrets file. The separate signing and status keys are generated once, deployed as Worker secrets, and stored locally in Windows CurrentUser DPAPI-encrypted `data/unsubscribe-config.json`. Preserve that ignored encrypted file; rotating or losing its keys invalidates old email links. No secret values are stored in source control.
+
+Verification: `node --test resend-mail.test.mjs unsubscribe-client.test.mjs unsubscribe-worker.test.mjs`.

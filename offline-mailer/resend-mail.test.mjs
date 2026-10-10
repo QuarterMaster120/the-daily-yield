@@ -34,3 +34,17 @@ test("authentication and throttling failures cannot report success", async () =>
     await assert.rejects(sendResend("recipient@example.com", { subject: "Rates" }, { apiKey: "test-only", fetch: async () => new Response("{}", { status }) }), new RegExp(`status ${status}`));
   }
 });
+
+test("signed HTTPS links enable the RFC 8058 one-click header", async () => {
+  const unsubscribe = "https://example.com/unsubscribe?token=test";
+  await sendResend("recipient@example.com", { subject: "Rates", unsubscribe }, {
+    apiKey: "test-only",
+    fetch: async (_, request) => {
+      assert.deepEqual(JSON.parse(request.body).headers, {
+        "List-Unsubscribe": `<${unsubscribe}>`,
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+      });
+      return new Response(JSON.stringify({id:"accepted"}),{status:200});
+    },
+  });
+});

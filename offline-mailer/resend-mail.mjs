@@ -24,7 +24,10 @@ export async function sendResend(email, mail, options = {}) {
       subject: mail.subject,
       html: mail.html,
       text: mail.text,
-      ...(mail.unsubscribe ? { headers: { "List-Unsubscribe": `<${mail.unsubscribe}>` } } : {}),
+      ...(mail.unsubscribe ? { headers: {
+        "List-Unsubscribe": `<${mail.unsubscribe}>`,
+        ...(mail.unsubscribe.startsWith("https://") ? { "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } : {}),
+      } } : {}),
     }),
     signal: AbortSignal.timeout(30_000),
   });
